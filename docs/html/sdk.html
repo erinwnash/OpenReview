@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenReview - Python SDK, DCC Integration &amp; Custom Plugins Guide</title>
+  <link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+  <header class="docs-header">
+    <a href="index.html" class="brand">
+      <span>Open<span class="accent">Review</span></span>
+      <span class="brand-meta">v0.1.0 • By Maruthu Chakravarthi</span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html">Application &amp; Architecture</a></li>
+      <li><a href="features.html">Features &amp; Shortcuts</a></li>
+      <li><a href="use_cases.html">Use Cases &amp; Workflows</a></li>
+      <li><a href="sdk.html" class="active">Python SDK, DCC &amp; Plugins</a></li>
+    </ul>
+  </header>
+
+  <div class="page-wrapper">
+    <!-- Sticky Sidebar TOC -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-title">Developer Manual</div>
+      <ul class="toc-list">
+        <li><a href="#ipc-architecture">1. JSON-RPC 2.0 IPC Protocol</a></li>
+        <li><a href="#sdk-client-api">2. OpenReviewClient Python SDK</a></li>
+        <li><a href="#sdk-quickstart" class="sub-link">2.1 Quickstart Example</a></li>
+        <li><a href="#sdk-method-table" class="sub-link">2.2 Complete API Reference</a></li>
+        <li><a href="#dcc-integrations">3. Production DCC Integrations</a></li>
+        <li><a href="#dcc-nuke" class="sub-link">3.1 Foundry Nuke (menu.py)</a></li>
+        <li><a href="#dcc-maya" class="sub-link">3.2 Autodesk Maya Playblast</a></li>
+        <li><a href="#dcc-houdini" class="sub-link">3.3 SideFX Houdini ROP Hook</a></li>
+        <li><a href="#dcc-blender" class="sub-link">3.4 Blender &amp; Render Farm CLI</a></li>
+        <li><a href="#plugin-architecture">4. Package &amp; Plugin Architecture</a></li>
+        <li><a href="#plugin-manifest" class="sub-link">4.1 manifest.json Specification</a></li>
+        <li><a href="#plugin-hooks" class="sub-link">4.2 OpenReviewPlugin Base Hooks</a></li>
+        <li><a href="#custom-plugins">5. Custom Plugin Recommendations</a></li>
+        <li><a href="#plug-shotgrid" class="sub-link">5.1 ShotGrid / Ftrack / Kitsu Sync</a></li>
+        <li><a href="#plug-qc-validator" class="sub-link">5.2 Automated Slate &amp; QC Validator</a></li>
+        <li><a href="#plug-custom-hud" class="sub-link">5.3 Custom Studio HUD Overlay</a></li>
+        <li><a href="#plug-html-exporter" class="sub-link">5.4 Client Review Report Exporter</a></li>
+      </ul>
+    </aside>
+
+    <main class="docs-container">
+      <div class="hero-header-row">
+        <span class="hero-badge">Pipeline TD &amp; Developer Manual</span>
+        <span class="author-badge">Author: Maruthu Chakravarthi</span>
+      </div>
+      <h1>Python SDK, DCC Integration &amp; Custom Plugin Developer Guide</h1>
+      <p>
+        <strong>OpenReview</strong> provides two complementary extensibility APIs for pipeline technical directors (TDs) and studio software engineers:
+      </p>
+      <ol>
+        <li><strong>External IPC Python SDK (<code>openreview.sdk</code>):</strong> Zero-dependency Python client communicating over TCP JSON-RPC 2.0 (`127.0.0.1:45124`) to remotely control OpenReview from Foundry Nuke, Autodesk Maya, SideFX Houdini, Blender, ShotGrid daemons, or farm scripts.</li>
+        <li><strong>In-Process Plugin &amp; Package Engine (<code>openreview.packages</code>):</strong> Full lifecycle event hook system (`OpenReviewPlugin` &amp; `PluginContext`) with direct access to the live `MainWindow`, `ViewportCanvas`, `PlaybackClock`, `AnnotationStore`, and `SessionGraph`.</li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- 1. JSON-RPC 2.0 IPC PROTOCOL -->
+      <!-- ================================================================== -->
+      <h2 id="ipc-architecture">1. JSON-RPC 2.0 IPC Architecture &amp; Wire Protocol</h2>
+      <p>
+        When OpenReview starts, <code>IpcServer</code> (<code>network/ipc_server.py</code>) binds an asynchronous <code>QTcpServer</code> on <code>127.0.0.1:45124</code>. External tools send newline-delimited UTF-8 JSON-RPC 2.0 payloads and receive synchronous JSON responses:
+      </p>
+
+      <pre><code>// Outgoing TCP Request (terminated by '\n')
+{"jsonrpc": "2.0", "id": 1, "method": "load_media", "params": {"path": "/shows/vfx/sh010/comp/v004/sh010_comp_v004.1001.exr"}}
+
+// Incoming TCP Response (terminated by '\n')
+{"jsonrpc": "2.0", "id": 1, "result": {"status": "loaded", "path": "/shows/vfx/sh010/comp/v004/sh010_comp_v004.1001.exr"}}
+
+// Querying Complete Viewer &amp; Session State
+{"jsonrpc": "2.0", "id": 2, "method": "get_status", "params": {}}
+// Response:
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "media_path": "/shows/vfx/sh010/comp/v004/sh010_comp_v004.1001.exr",
+    "media_type": "sequence",
+    "current_frame": 1024,
+    "start_frame": 1001,
+    "end_frame": 1080,
+    "in_frame": 1010,
+    "out_frame": 1065,
+    "fps": 24.0,
+    "is_playing": true,
+    "loop_mode": "loop",
+    "exposure_ev": 0.5,
+    "gain": 1.414,
+    "gamma": 1.0,
+    "saturation": 1.0,
+    "channel_mode": 0,
+    "playback_engine": "opengl_core",
+    "bookmarks": [1015, 1032, 1050]
+  }
+}</code></pre>
+
+      <!-- ================================================================== -->
+      <!-- 2. OPENREVIEWCLIENT PYTHON SDK -->
+      <!-- ================================================================== -->
+      <h2 id="sdk-client-api">2. <code>OpenReviewClient</code> Python SDK Reference</h2>
+      <p>
+        The <code>OpenReviewClient</code> class (<code>src/openreview/sdk/client.py</code>) uses only Python's standard library (<code>socket</code>, <code>json</code>)—meaning it can be imported inside any DCC's embedded Python interpreter (Python 3.7–3.12+) without installing PySide6 or NumPy.
+      </p>
+
+      <h3 id="sdk-quickstart">2.1 Developer Quickstart Example</h3>
+      <pre><code>from openreview.sdk.client import OpenReviewClient, OpenReviewError
+from openreview.sdk.dcc import review_in_openreview
+
+# Option A: One-liner helper (auto-launches OpenReview if not already running)
+review_in_openreview(
+    media_path="/shows/vfx/seq010/sh010/renders/sh010_comp_v004.1001.exr",
+    in_frame=1001,
+    out_frame=1080,
+)
+
+# Option B: Full programmatic control via OpenReviewClient
+client = OpenReviewClient(host="127.0.0.1", port=45124, timeout=4.0)
+
+if client.ping():
+    # 1. Load EXR sequence or QuickTime movie
+    client.load_media("/shows/vfx/seq010/sh010/renders/sh010_comp_v004.1001.exr")
+
+    # 2. Configure frame rate, In/Out range, and bookmarks
+    client.set_fps(24.0)
+    client.set_in_out(1009, 1072)
+    client.clear_bookmarks()
+    client.add_bookmark(1024)
+    client.add_bookmark(1048)
+
+    # 3. Apply non-destructive GLSL color grading
+    client.set_color(exposure=0.25, gain=1.189, gamma=1.05, saturation=1.10)
+
+    # 4. Seek to hero frame, export a PNG snapshot, and start playback
+    client.seek(1024)
+    client.export_frame("/tmp/sh010_hero_frame_1024.png")
+    client.play()
+
+    # 5. Inspect live telemetry
+    state = client.get_status()
+    print(f"Playing {state['media_path']} at {state['fps']} FPS (Frame {state['current_frame']})")</code></pre>
+
+      <h3 id="sdk-method-table">2.2 Complete <code>OpenReviewClient</code> Method Reference</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>SDK Method Signature</th>
+            <th>RPC Method</th>
+            <th>Return Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ping()</code></td>
+            <td><code>ping</code></td>
+            <td><code>bool</code></td>
+            <td>Returns <code>True</code> if an OpenReview instance is listening on the target host/port.</td>
+          </tr>
+          <tr>
+            <td><code>get_status()</code></td>
+            <td><code>get_status</code></td>
+            <td><code>Dict[str, Any]</code></td>
+            <td>Returns complete dictionary of active media path, frame range, playhead, FPS, color grade, and bookmarks.</td>
+          </tr>
+          <tr>
+            <td><code>load_media(path: str)</code></td>
+            <td><code>load_media</code></td>
+            <td><code>bool</code></td>
+            <td>Loads a video file, image sequence, still image, audio file, or <code>.ovr</code> session into OpenReview.</td>
+          </tr>
+          <tr>
+            <td><code>play()</code></td>
+            <td><code>play</code></td>
+            <td><code>bool</code></td>
+            <td>Starts sequence playback and returns <code>True</code>.</td>
+          </tr>
+          <tr>
+            <td><code>pause()</code></td>
+            <td><code>pause</code></td>
+            <td><code>bool</code></td>
+            <td>Pauses active playback and returns <code>True</code>.</td>
+          </tr>
+          <tr>
+            <td><code>toggle_play()</code></td>
+            <td><code>toggle_play</code></td>
+            <td><code>bool</code></td>
+            <td>Toggles play/pause state and returns the new <code>is_playing</code> boolean.</td>
+          </tr>
+          <tr>
+            <td><code>seek(frame: int)</code></td>
+            <td><code>seek</code></td>
+            <td><code>int</code></td>
+            <td>Jumps playhead to the specified frame number and returns the clamped frame.</td>
+          </tr>
+          <tr>
+            <td><code>set_fps(fps: float)</code></td>
+            <td><code>set_fps</code></td>
+            <td><code>float</code></td>
+            <td>Sets the playback clock frame rate (e.g., <code>24.0</code>, <code>30.0</code>, <code>60.0</code>).</td>
+          </tr>
+          <tr>
+            <td><code>set_in_out(in_frame: int, out_frame: int)</code></td>
+            <td><code>set_in_out</code></td>
+            <td><code>Dict[str, int]</code></td>
+            <td>Clamps timeline loop In and Out points to <code>[in_frame, out_frame]</code>.</td>
+          </tr>
+          <tr>
+            <td><code>set_exposure(ev: float)</code></td>
+            <td><code>set_color</code></td>
+            <td><code>float</code></td>
+            <td>Sets viewer F-stop exposure compensation in EV stops.</td>
+          </tr>
+          <tr>
+            <td><code>set_gain(gain: float)</code></td>
+            <td><code>set_color</code></td>
+            <td><code>float</code></td>
+            <td>Sets viewer linear exposure gain multiplier.</td>
+          </tr>
+          <tr>
+            <td><code>set_gamma(gamma: float)</code></td>
+            <td><code>set_color</code></td>
+            <td><code>float</code></td>
+            <td>Sets viewer display gamma power curve.</td>
+          </tr>
+          <tr>
+            <td><code>set_saturation(sat: float)</code></td>
+            <td><code>set_color</code></td>
+            <td><code>float</code></td>
+            <td>Sets viewer Rec.709 luma-preserving saturation multiplier.</td>
+          </tr>
+          <tr>
+            <td><code>set_color(gain, gamma, saturation, exposure)</code></td>
+            <td><code>set_color</code></td>
+            <td><code>Dict[str, float]</code></td>
+            <td>Atomically updates multiple viewer color parameters in a single RPC call.</td>
+          </tr>
+          <tr>
+            <td><code>add_bookmark(frame: Optional[int], note: str)</code></td>
+            <td><code>add_bookmark</code></td>
+            <td><code>List[int]</code></td>
+            <td>Adds a bookmark at <code>frame</code> (or current frame if <code>None</code>) and returns sorted bookmark list.</td>
+          </tr>
+          <tr>
+            <td><code>clear_bookmarks()</code></td>
+            <td><code>clear_bookmarks</code></td>
+            <td><code>List[int]</code></td>
+            <td>Clears all timeline bookmarks.</td>
+          </tr>
+          <tr>
+            <td><code>export_current_frame(destination: str)</code> / <code>export_frame(destination, frame)</code></td>
+            <td><code>export_frame</code></td>
+            <td><code>str</code> / <code>bool</code></td>
+            <td>Captures the current OpenGL viewport buffer and saves it to <code>destination</code> image path.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ================================================================== -->
+      <!-- 3. PRODUCTION DCC INTEGRATIONS -->
+      <!-- ================================================================== -->
+      <h2 id="dcc-integrations">3. Developer-Ready DCC Integration Guides &amp; Scripts</h2>
+      <p>
+        Built-in DCC helpers are provided in <code>src/openreview/sdk/dcc.py</code>. Below are complete, copy-paste-ready studio deployment scripts for <strong>Foundry Nuke</strong>, <strong>Autodesk Maya</strong>, <strong>SideFX Houdini</strong>, and <strong>Blender</strong>.
+      </p>
+
+      <h3 id="dcc-nuke">3.1 Foundry Nuke Integration (<code>~/.nuke/menu.py</code>)</h3>
+      <p>
+        Registers a <code>Pipeline &rarr; Send Read/Write to OpenReview</code> command bound to <span class="key-badge">Ctrl+Alt+R</span>, plus an automatic <code>afterRender</code> callback that pushes completed Nuke Write renders straight into OpenReview:
+      </p>
+      <pre><code># ~/.nuke/menu.py — Foundry Nuke Studio Integration for OpenReview
+import nuke
+from openreview.sdk.dcc import review_in_openreview
+from openreview.sdk.client import OpenReviewClient
+
+def send_selected_to_openreview():
+    """Send selected Nuke Read or Write node to OpenReview with exact frame range and FPS."""
+    nodes = nuke.selectedNodes()
+    if not nodes:
+        nuke.message("Please select a Read or Write node first.")
+        return
+
+    node = nodes[0]
+    if node.Class() not in ("Read", "Write"):
+        nuke.message(f"Node '{node.name()}' ({node.Class()}) is not a Read or Write node.")
+        return
+
+    file_path = nuke.filename(node, nuke.REPLACE)
+    first = int(node["first"].value()) if "first" in node.knobs() else int(nuke.root()["first_frame"].value())
+    last = int(node["last"].value()) if "last" in node.knobs() else int(nuke.root()["last_frame"].value())
+    fps = float(nuke.root()["fps"].value())
+
+    review_in_openreview(file_path, in_frame=first, out_frame=last)
+    client = OpenReviewClient()
+    if client.ping():
+        client.set_fps(fps)
+
+def auto_review_after_write_render():
+    """Optional Write node afterRender callback."""
+    node = nuke.thisNode()
+    if node and node.Class() == "Write":
+        file_path = nuke.filename(node, nuke.REPLACE)
+        first = int(nuke.root()["first_frame"].value())
+        last = int(nuke.root()["last_frame"].value())
+        review_in_openreview(file_path, in_frame=first, out_frame=last)
+
+# Register top menu item &amp; shortcut
+pipeline_menu = nuke.menu("Nuke").addMenu("OpenReview")
+pipeline_menu.addCommand("Review Selected Node in OpenReview", send_selected_to_openreview, "Ctrl+Alt+R")</code></pre>
+
+      <h3 id="dcc-maya">3.2 Autodesk Maya Shelf &amp; Playblast Hook</h3>
+      <p>
+        Captures a viewport 2.0 H.264 / ProRes playblast matching the Maya timeline range and frame rate, then streams it immediately into OpenReview:
+      </p>
+      <pre><code># Maya Shelf Button Script — Playblast Directly to OpenReview
+import os
+import tempfile
+import maya.cmds as cmds
+from openreview.sdk.dcc import review_in_openreview
+from openreview.sdk.client import OpenReviewClient
+
+def maya_playblast_to_openreview():
+    start_f = int(cmds.playbackOptions(q=True, min=True))
+    end_f = int(cmds.playbackOptions(q=True, max=True))
+
+    scene_name = cmds.file(q=True, sn=True, shn=True) or "untitled_maya_scene"
+    base_name = os.path.splitext(scene_name)[0]
+    out_file = os.path.join(tempfile.gettempdir(), f"{base_name}_playblast.mov")
+
+    pb_path = cmds.playblast(
+        filename=out_file,
+        format="qt",
+        compression="H.264",
+        quality=100,
+        percent=100,
+        widthHeight=(1920, 1080),
+        showOrnaments=True,
+        forceOverwrite=True,
+        viewer=False,
+    )
+    if pb_path:
+        review_in_openreview(pb_path, in_frame=1, out_frame=(end_f - start_f + 1))
+
+maya_playblast_to_openreview()</code></pre>
+
+      <h3 id="dcc-houdini">3.3 SideFX Houdini Solaris / Karma / Mantra Post-Render Hook</h3>
+      <p>
+        Add this script to the <strong>Post-Render Script</strong> parameter on any Mantra, Karma, or OpenGL ROP node in Houdini:
+      </p>
+      <pre><code># SideFX Houdini ROP Post-Render Script (Python)
+import hou
+from openreview.sdk.dcc import review_in_openreview
+from openreview.sdk.client import OpenReviewClient
+
+rop = hou.pwd()
+# Resolve output picture parm across Mantra (vm_picture), Karma (picture), or Fetch/OpenGL (picture)
+for parm_name in ("vm_picture", "picture", "lopoutput"):
+    parm = rop.parm(parm_name)
+    if parm is not None:
+        out_path = parm.evalAtFrame(hou.frame())
+        start_f = int(rop.parm("f1").eval()) if rop.parm("f1") else int(hou.playbar.frameRange()[0])
+        end_f = int(rop.parm("f2").eval()) if rop.parm("f2") else int(hou.playbar.frameRange()[1])
+        review_in_openreview(out_path, in_frame=start_f, out_frame=end_f)
+        break</code></pre>
+
+      <h3 id="dcc-blender">3.4 Blender Render Complete Handler</h3>
+      <pre><code># Blender Add-on / Text Editor Script: Auto-Send Completed Animation Render to OpenReview
+import bpy
+from openreview.sdk.dcc import review_in_openreview
+
+def on_blender_render_complete(scene):
+    render_path = bpy.path.abspath(scene.render.frame_path(frame=scene.frame_start))
+    review_in_openreview(
+        media_path=render_path,
+        in_frame=scene.frame_start,
+        out_frame=scene.frame_end,
+    )
+
+if on_blender_render_complete not in bpy.app.handlers.render_complete:
+    bpy.app.handlers.render_complete.append(on_blender_render_complete)</code></pre>
+
+      <!-- ================================================================== -->
+      <!-- 4. PACKAGE & PLUGIN ARCHITECTURE -->
+      <!-- ================================================================== -->
+      <h2 id="plugin-architecture">4. OpenReview Package &amp; Plugin Extension Architecture</h2>
+      <p>
+        OpenReview features a first-class plugin engine managed by <code>PackageManager</code> (<code>src/openreview/packages/package_manager.py</code>). Plugins are self-contained folders (or installable <code>.zip</code> packages) discovered automatically from three locations in priority order:
+      </p>
+      <ol>
+        <li><strong>Built-in Packages:</strong> <code>src/openreview/packages/builtin/</code></li>
+        <li><strong>User Packages Directory:</strong> <code>~/.openreview/packages/</code></li>
+        <li><strong>Studio Environment Variable:</strong> Any directories listed in <code>$OPENREVIEW_PACKAGE_PATH</code> (separated by <code>;</code> on Windows or <code>:</code> on Linux/macOS).</li>
+      </ol>
+
+      <figure class="doc-figure">
+        <img src="assets/screenshots/dialog_package_manager.png" alt="Package and Plugin Manager Dialog">
+        <figcaption><strong>Figure 4.1:</strong> The Package &amp; Plugin Manager Dialog showing installed plugins, enable/disable toggles, and one-click ZIP package installation.</figcaption>
+      </figure>
+
+      <h3 id="plugin-manifest">4.1 Package Directory Structure &amp; <code>manifest.json</code> Specification</h3>
+      <p>Every plugin folder contains a <code>manifest.json</code> (or <code>package.json</code>) metadata file and a Python entrypoint module (default <code>plugin.py</code>):</p>
+      <pre><code>~/.openreview/packages/my_studio_plugin/
+├── manifest.json
+└── plugin.py</code></pre>
+      <pre><code>{
+  "id": "com.studio.shotgrid_sync",
+  "name": "ShotGrid Review Sync",
+  "version": "1.2.0",
+  "author": "Maruthu Chakravarthi / Studio Pipeline Team",
+  "description": "Synchronizes OpenReview annotations, frame notes, and approval statuses with ShotGrid.",
+  "entrypoint": "plugin.py",
+  "min_openreview_version": "0.1.0",
+  "enabled": true,
+  "category": "Pipeline Integration",
+  "tags": ["shotgrid", "dailies", "notes", "publish"],
+  "hooks": ["on_media_loaded", "on_annotation_added", "on_session_saved"]
+}</code></pre>
+
+      <h3 id="plugin-hooks">4.2 <code>OpenReviewPlugin</code> Base Class &amp; Lifecycle Hooks</h3>
+      <p>
+        Your <code>plugin.py</code> defines a subclass of <code>OpenReviewPlugin</code> (<code>openreview.packages.plugin_base</code>). Each plugin instance receives a <code>self.context</code> (<code>PluginContext</code>) providing <code>self.context.main_window</code>, <code>self.context.log(msg)</code>, and <code>self.context.show_toast(msg)</code>:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Hook Method</th>
+            <th>Signature</th>
+            <th>When Fired</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>initialize()</code> / <code>on_init(context)</code></td>
+            <td><code>(self) -&gt; None</code></td>
+            <td>Called immediately when the plugin is loaded on startup or enabled in the Package Manager. Ideal for adding custom menu items to <code>self.context.main_window.menuBar()</code>.</td>
+          </tr>
+          <tr>
+            <td><code>shutdown()</code> / <code>on_shutdown()</code></td>
+            <td><code>(self) -&gt; None</code></td>
+            <td>Called when the plugin is disabled, unloaded, or when OpenReview exits. Clean up threads or sockets here.</td>
+          </tr>
+          <tr>
+            <td><code>on_media_loaded(media_path)</code></td>
+            <td><code>(self, media_path: str) -&gt; None</code></td>
+            <td>Fired whenever a new video, image sequence, or still is loaded into the viewer.</td>
+          </tr>
+          <tr>
+            <td><code>on_frame_changed(frame)</code></td>
+            <td><code>(self, frame: int) -&gt; None</code></td>
+            <td>Fired on every playhead frame change or timeline scrub.</td>
+          </tr>
+          <tr>
+            <td><code>on_playback_state_changed(is_playing)</code></td>
+            <td><code>(self, is_playing: bool) -&gt; None</code></td>
+            <td>Fired whenever playback starts or pauses.</td>
+          </tr>
+          <tr>
+            <td><code>on_annotation_added(annotation)</code></td>
+            <td><code>(self, annotation: Stroke) -&gt; None</code></td>
+            <td>Fired whenever a user finishes drawing a vector stroke or text callout on the canvas.</td>
+          </tr>
+          <tr>
+            <td><code>on_session_saved(session_path)</code></td>
+            <td><code>(self, session_path: str) -&gt; None</code></td>
+            <td>Fired after an OpenReview <code>.ovr</code> session file is written to disk.</td>
+          </tr>
+          <tr>
+            <td><code>on_session_loaded(session_path)</code></td>
+            <td><code>(self, session_path: str) -&gt; None</code></td>
+            <td>Fired after an OpenReview <code>.ovr</code> session file is opened.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ================================================================== -->
+      <!-- 5. CUSTOM PLUGIN RECOMMENDATIONS WITH COMPLETE EXAMPLES -->
+      <!-- ================================================================== -->
+      <h2 id="custom-plugins">5. Custom Studio Plugin Recommendations with Production Code Examples</h2>
+      <p>
+        Below are <strong>four complete, production-ready custom plugin implementations</strong> designed for VFX and animation studios. Each example can be dropped directly into <code>~/.openreview/packages/&lt;plugin_name&gt;/plugin.py</code> alongside a <code>manifest.json</code>.
+      </p>
+
+      <!-- 5.1 ShotGrid / Ftrack / Kitsu Sync Plugin -->
+      <h3 id="plug-shotgrid">5.1 Recommendation 1: ShotGrid / Ftrack / Kitsu Note &amp; Status Publisher Plugin</h3>
+      <p>
+        <strong>Use Case:</strong> During supervisory dailies, the supervisor draws vector annotations on key frames and types notes in the Annotation Manager. Clicking <em>Studio &rarr; Publish Review Notes to ShotGrid</em> automatically renders burned-in JPEG attachments for every annotated frame and uploads them with frame numbers and supervisor comments to your production tracking database.
+      </p>
+      <pre><code>"""
+~/.openreview/packages/shotgrid_publisher/plugin.py
+Publishes annotated keyframes, burned-in attachments, and supervisor notes to ShotGrid / Kitsu.
+"""
+import os
+import re
+import tempfile
+from pathlib import Path
+from openreview.packages.plugin_base import OpenReviewPlugin
+from openreview.core.exporter import MediaExporter
+
+
+class ShotGridPublisherPlugin(OpenReviewPlugin):
+    """Studio production tracking publisher extension for OpenReview."""
+
+    def initialize(self) -> None:
+        self.context.log("Initializing ShotGrid Review Publisher Plugin...")
+        win = self.context.main_window
+        if win and hasattr(win, "menuBar"):
+            studio_menu = win.menuBar().addMenu("&amp;Studio Pipeline")
+            pub_act = studio_menu.addAction("Publish Annotated Frames &amp; Notes to ShotGrid...")
+            pub_act.triggered.connect(self.publish_current_session_notes)
+
+    def _parse_shot_and_version(self, media_path: str) -> tuple[str, str]:
+        """Extract shot code (e.g. sh010) and version (e.g. v004) from pipeline path."""
+        name = Path(media_path).name
+        shot_match = re.search(r"(sh\d+|seq\d+_sh\d+)", name, re.IGNORECASE)
+        ver_match = re.search(r"(v\d{2,4})", name, re.IGNORECASE)
+        return (
+            shot_match.group(1) if shot_match else "unknown_shot",
+            ver_match.group(1) if ver_match else "v001",
+        )
+
+    def publish_current_session_notes(self) -> None:
+        win = self.context.main_window
+        if not win:
+            return
+
+        media_path = getattr(win, "_current_media_path", None) or ""
+        shot_code, version_code = self._parse_shot_and_version(media_path)
+        annot_frames = win.annotation_store.get_annotated_frames()
+
+        if not annot_frames:
+            self.context.show_toast("No annotated frames or notes to publish.")
+            return
+
+        out_dir = Path(tempfile.gettempdir()) / "openreview_sg_publish" / f"{shot_code}_{version_code}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        published_payloads = []
+        for frame_num in annot_frames:
+            # Render native frame with burned-in vector strokes and active grade
+            rgb_img = win._render_frame_for_export(frame_num)
+            jpg_path = out_dir / f"{shot_code}_{version_code}.{frame_num:04d}.jpg"
+            MediaExporter.save_image_file(rgb_img, str(jpg_path))
+
+            note_text = win.annotation_store.get_frame_note(frame_num) or "See burned-in frame annotation."
+            published_payloads.append({
+                "shot": shot_code,
+                "version": version_code,
+                "frame": frame_num,
+                "note": note_text,
+                "attachment": str(jpg_path),
+            })
+
+        # Here you would call sg.create("Note", ...) via shotgun_api3 or gazu (Kitsu)
+        self.context.log(f"Published {len(published_payloads)} annotated frames for {shot_code} ({version_code}) to {out_dir}")
+        self.context.show_toast(f"Published {len(published_payloads)} notes for {shot_code} {version_code}!")</code></pre>
+
+      <!-- 5.2 Automated Slate, Burn-in & Technical QC Validator Plugin -->
+      <h3 id="plug-qc-validator">5.2 Recommendation 2: Automated Technical QC &amp; NaN/Inf/Framerate Validator Plugin</h3>
+      <p>
+        <strong>Use Case:</strong> Automatically validates every sequence loaded into OpenReview against studio delivery specs (checking for <code>24.0 FPS</code> compliance, <code>ACEScg</code> colorspace, missing/dropped frame gaps on disk, and corrupted <code>NaN</code> / <code>Inf</code> / negative pixels on the start frame) and alerts the artist immediately with a viewport toast and console report.
+      </p>
+      <pre><code>"""
+~/.openreview/packages/auto_qc_validator/plugin.py
+Automated Technical Quality Control (QC) Validator on Media Load.
+"""
+import numpy as np
+from openreview.packages.plugin_base import OpenReviewPlugin
+from openreview.core.sequence_parser import detect_image_sequence
+
+
+class AutoQCValidatorPlugin(OpenReviewPlugin):
+    """Runs automatic studio technical QC checks whenever media is loaded."""
+
+    REQUIRED_FPS = 24.0
+    EXPECTED_RESOLUTION = (1920, 1080)
+
+    def initialize(self) -> None:
+        self.context.log("Automated Technical QC Validator Plugin active.")
+
+    def on_media_loaded(self, media_path: str) -> None:
+        win = self.context.main_window
+        if not win:
+            return
+
+        issues = []
+
+        # 1. Check Sequence Frame Continuity (Missing / Dropped Frames)
+        seq = detect_image_sequence(media_path)
+        if seq and len(seq.available_frames) &gt; 1:
+            expected_set = set(range(seq.start_frame, seq.end_frame + 1))
+            missing = sorted(list(expected_set - set(seq.available_frames)))
+            if missing:
+                issues.append(f"Missing {len(missing)} frames (e.g. {missing[:5]})")
+
+        # 2. Check Frame Rate Compliance
+        if abs(win.clock.fps - self.REQUIRED_FPS) &gt; 0.01:
+            issues.append(f"FPS mismatch ({win.clock.fps} FPS vs studio {self.REQUIRED_FPS} FPS)")
+
+        # 3. Check First Frame for NaN / Inf Pixels and Resolution
+        img = getattr(win.viewport, "_image_a", None)
+        if img is not None and isinstance(img, np.ndarray):
+            h, w = img.shape[:2]
+            if (w, h) != self.EXPECTED_RESOLUTION:
+                issues.append(f"Non-standard resolution: {w}x{h}")
+            nan_count = int(np.isnan(img).sum())
+            inf_count = int(np.isinf(img).sum())
+            if nan_count &gt; 0 or inf_count &gt; 0:
+                issues.append(f"CRITICAL: {nan_count} NaN and {inf_count} Inf pixels detected!")
+
+        if issues:
+            summary = " | ".join(issues)
+            self.context.log(f"[QC WARNING] {media_path}: {summary}")
+            self.context.show_toast(f"QC Warning: {issues[0]}", duration_ms=5000)
+        else:
+            self.context.log(f"[QC PASSED] {media_path} conforms to all studio specifications.")
+            self.context.show_toast("QC Passed: Sequence conforms to studio specs.")</code></pre>
+
+      <!-- 5.3 Custom Studio HUD Overlay & Burn-in Generator -->
+      <h3 id="plug-custom-hud">5.3 Recommendation 3: Custom Studio Telemetry &amp; Artist Burn-In HUD Plugin</h3>
+      <p>
+        <strong>Use Case:</strong> Extends the built-in <code>TimecodeHudPlugin</code> pattern to dynamically update the viewport's top <strong>Info Strip Overlay</strong> (<span class="key-badge">Ctrl+I</span>) on every frame with studio-specific shot telemetry (Show Code, Artist Name, Department, SMPTE Timecode, and Focal Length).
+      </p>
+      <pre><code>"""
+~/.openreview/packages/studio_hud_burnin/plugin.py
+Populates the Viewport Info Strip with live Studio Shot Telemetry on every frame.
+"""
+import os
+from pathlib import Path
+from openreview.packages.plugin_base import OpenReviewPlugin
+from openreview.core.timecode import frame_to_timecode
+
+
+class StudioBurnInHudPlugin(OpenReviewPlugin):
+    """Dynamic studio metadata burn-in HUD extension."""
+
+    def initialize(self) -> None:
+        self.show_code = os.environ.get("SHOW_CODE", "VFX_FEATURE_2026")
+        self.artist_name = os.environ.get("USERNAME", os.environ.get("USER", "artist"))
+        self.context.log(f"Studio Burn-In HUD initialized for show: {self.show_code}")
+
+    def on_media_loaded(self, media_path: str) -> None:
+        win = self.context.main_window
+        if win and hasattr(win, "viewport"):
+            win.viewport.set_show_info_strip(True)
+            self._refresh_hud(win.clock.current_frame)
+
+    def on_frame_changed(self, frame: int) -> None:
+        self._refresh_hud(frame)
+
+    def _refresh_hud(self, frame: int) -> None:
+        win = self.context.main_window
+        if not win or not hasattr(win, "viewport"):
+            return
+
+        fps = win.clock.fps
+        tc = frame_to_timecode(frame, fps)
+        media_name = Path(getattr(win, "_current_media_path", None) or "No Media").name
+
+        win.viewport.update_info_strip_data(
+            show=self.show_code,
+            shot=media_name,
+            artist=self.artist_name,
+            frame=frame,
+            timecode=tc,
+            fps=f"{fps:.2f}",
+            colorspace=win.ocio_manager.input_space or "ACEScg",
+        )</code></pre>
+
+      <!-- 5.4 Client Review HTML / PDF Contact Sheet Exporter Plugin -->
+      <h3 id="plug-html-exporter">5.4 Recommendation 4: Client Review HTML Contact Sheet &amp; Note Report Generator</h3>
+      <p>
+        <strong>Use Case:</strong> Automatically generates a self-contained, styled HTML review report with embedded base64/PNG thumbnails of every annotated keyframe, timecode stamps, stroke counts, and supervisor notes whenever a session is saved (or via menu command)—ready to email or upload to confluence/client portals.
+      </p>
+      <pre><code>"""
+~/.openreview/packages/html_review_exporter/plugin.py
+Generates a formatted HTML Client Review Contact Sheet with annotated frame thumbnails.
+"""
+import base64
+from io import BytesIO
+from pathlib import Path
+from openreview.packages.plugin_base import OpenReviewPlugin
+from openreview.core.timecode import frame_to_timecode
+
+
+class HtmlReviewReportPlugin(OpenReviewPlugin):
+    """Exports an HTML visual contact sheet whenever a session with annotations is saved."""
+
+    def on_session_saved(self, session_path: str) -> None:
+        win = self.context.main_window
+        if not win:
+            return
+
+        annot_frames = win.annotation_store.get_annotated_frames()
+        if not annot_frames:
+            return
+
+        report_path = Path(session_path).with_suffix(".review_report.html")
+        rows_html = []
+
+        for frame_num in annot_frames:
+            tc = frame_to_timecode(frame_num, win.clock.fps)
+            note = win.annotation_store.get_frame_note(frame_num) or "(Vector markup only)"
+            strokes = win.annotation_store.get_strokes(frame_num)
+
+            # Save frame thumbnail alongside HTML report
+            thumb_name = f"{Path(session_path).stem}_frame_{frame_num:04d}.png"
+            thumb_path = report_path.parent / thumb_name
+            rgb_arr = win._render_frame_for_export(frame_num)
+            from openreview.core.exporter import MediaExporter
+            MediaExporter.save_image_file(rgb_arr, str(thumb_path))
+
+            rows_html.append(f"""
+            &lt;div style="display:flex; gap:20px; background:#1c1e22; border:1px solid #333; border-radius:8px; padding:16px; margin-bottom:16px;"&gt;
+              &lt;img src="{thumb_name}" style="width:360px; border-radius:4px; border:1px solid #444;" /&gt;
+              &lt;div&gt;
+                &lt;h3 style="color:#e5a823; margin:0 0 8px 0;"&gt;Frame {frame_num} &amp;bull; Timecode {tc}&lt;/h3&gt;
+                &lt;p style="color:#9ca3af; font-size:13px;"&gt;Vector Strokes: {len(strokes)}&lt;/p&gt;
+                &lt;p style="color:#e6edf3; font-size:15px;"&gt;{note}&lt;/p&gt;
+              &lt;/div&gt;
+            &lt;/div&gt;
+            """)
+
+        html_doc = f"""&lt;!DOCTYPE html&gt;
+&lt;html&gt;&lt;body style="background:#121315; color:#e6edf3; font-family:sans-serif; padding:32px;"&gt;
+  &lt;h1 style="color:#e5a823;"&gt;OpenReview Dailies Report — {Path(session_path).stem}&lt;/h1&gt;
+  {''.join(rows_html)}
+&lt;/body&gt;&lt;/html&gt;"""
+
+        report_path.write_text(html_doc, encoding="utf-8")
+        self.context.log(f"Exported HTML Review Contact Sheet to {report_path}")
+        self.context.show_toast(f"Saved HTML Review Report: {report_path.name}")</code></pre>
+
+    </main>
+  </div>
+
+  <footer class="docs-footer">
+    <strong>OpenReview v0.1.0</strong> &bull; Authored by <strong>Maruthu Chakravarthi</strong> &bull; Professional VFX Review &amp; Playback Workstation Documentation
+  </footer>
+
+</body>
+</html>

@@ -1,0 +1,61 @@
+import os
+import json
+import pytest
+from PySide6.QtWidgets import QApplication
+from openreview.core.preferences import UserPreferences, PreferencesManager
+from openreview.ui.preferences_dialog import PreferencesDialog
+
+
+def test_user_preferences_defaults():
+    prefs = UserPreferences()
+    assert prefs.default_fps == 24.0
+    assert prefs.play_on_startup is False
+    assert prefs.start_fullscreen is False
+    assert prefs.canvas_scrub_enabled is True
+    assert prefs.auto_retime_mismatched_fps is True
+    assert prefs.play_all_frames is True
+    assert prefs.default_cache_mode == "region"
+    assert prefs.lookahead_cache_gb == 4.0
+    assert prefs.region_cache_gb == 4.0
+    assert prefs.lookahead_behind_pct == 20.0
+
+
+def test_preferences_persistence(tmp_path):
+    mgr = PreferencesManager(config_dir=tmp_path)
+
+    # Modify preferences
+    mgr.prefs.default_fps = 30.0
+    mgr.prefs.lookahead_cache_gb = 8.0
+    mgr.prefs.start_fullscreen = True
+    mgr.prefs.default_cache_mode = "play_ahead"
+    mgr.save()
+
+    json_path = tmp_path / "preferences.json"
+    assert json_path.exists()
+
+    # Load in new manager pointing to same folder
+    mgr2 = PreferencesManager(config_dir=tmp_path)
+    assert mgr2.prefs.default_fps == 30.0
+    assert mgr2.prefs.lookahead_cache_gb == 8.0
+    assert mgr2.prefs.start_fullscreen is True
+    assert mgr2.prefs.default_cache_mode == "play_ahead"
+
+
+def test_preferences_dialog(qapp, tmp_path):
+    mgr = PreferencesManager(config_dir=tmp_path)
+
+    dlg = PreferencesDialog(mgr)
+    assert dlg.spin_fps.value() == 24.0
+    assert dlg.combo_cache_mode.currentData() == "region"
+
+    # Edit dialog fields
+    dlg.spin_fps.setValue(60.0)
+    dlg.combo_cache_mode.setCurrentIndex(1)  # Play-Ahead
+    dlg.chk_fullscreen.setChecked(True)
+
+    # Save via dialog
+    dlg._save_and_close()
+
+    assert mgr.prefs.default_fps == 60.0
+    assert mgr.prefs.start_fullscreen is True
+    assert mgr.prefs.default_cache_mode == "play_ahead"

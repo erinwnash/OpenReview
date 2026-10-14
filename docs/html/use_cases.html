@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenReview - Production Use Cases &amp; Studio Workflows</title>
+  <link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+  <header class="docs-header">
+    <a href="index.html" class="brand">
+      <span>Open<span class="accent">Review</span></span>
+      <span class="brand-meta">v0.1.0 • By Maruthu Chakravarthi</span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html">Application &amp; Architecture</a></li>
+      <li><a href="features.html">Features &amp; Shortcuts</a></li>
+      <li><a href="use_cases.html" class="active">Use Cases &amp; Workflows</a></li>
+      <li><a href="sdk.html">Python SDK, DCC &amp; Plugins</a></li>
+    </ul>
+  </header>
+
+  <div class="page-wrapper">
+    <!-- Sticky Sidebar TOC -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-title">Production Workflows</div>
+      <ul class="toc-list">
+        <li><a href="#wf-dailies">1. Studio Dailies, Playlists &amp; Version Stepping</a></li>
+        <li><a href="#wf-comp-qc">2. Plate vs. Comp QC, Wipes &amp; Difference Modes</a></li>
+        <li><a href="#wf-stacks-layouts">3. Multi-Layer Stacking &amp; Tiled Contact Sheets</a></li>
+        <li><a href="#wf-color-ocio">4. ACES / OCIO v2 Color, LUT/CDL &amp; Zebra QC</a></li>
+        <li><a href="#wf-pixel-probe">5. 32-Bit Float Pixel Probe &amp; NaN/Inf Hunting</a></li>
+        <li><a href="#wf-exr-aov">6. Multi-Pass CG EXR AOV Inspection</a></li>
+        <li><a href="#wf-stereo">7. Stereoscopic 3D Convergence &amp; Depth QC</a></li>
+        <li><a href="#wf-annotations">8. Supervisory Markup, Notes &amp; Export Pipeline</a></li>
+        <li><a href="#wf-remote-sync">9. Multi-User Remote Dailies Collaboration</a></li>
+        <li><a href="#wf-audio-sync">10. Dialogue Lip-Sync &amp; Audio Offset Calibration</a></li>
+        <li><a href="#wf-presentation">11. Executive &amp; Client Presentation Screening</a></li>
+      </ul>
+    </aside>
+
+    <main class="docs-container">
+      <div class="hero-header-row">
+        <span class="hero-badge">End-to-End Studio Workflows</span>
+        <span class="author-badge">Author: Maruthu Chakravarthi</span>
+      </div>
+      <h1>Production Use Cases &amp; Step-by-Step Studio Workflows</h1>
+      <p>
+        This manual provides exhaustive, step-by-step operational procedures for every major VFX, animation, digital intermediate (DI), and supervisory workflow in <strong>OpenReview</strong>. Each use case details the exact UI panels, keyboard shortcuts, and mathematical inspection tools required to execute the workflow without friction.
+      </p>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 1: STUDIO DAILIES & VERSION STEPPING -->
+      <!-- ================================================================== -->
+      <h2 id="wf-dailies">1. Daily Studio Dailies, Playlist Assembly &amp; Instant Version Stepping</h2>
+      <p>
+        During morning rounds or theatrical dailies, VFX Supervisors, Compositing Leads, and Coordinators review dozens of shot submissions across sequences and episodes. OpenReview's <strong>Inbuilt File Browser</strong>, <strong>Sources &amp; Session Manager</strong>, and <strong>Version Control Engine</strong> eliminate manual file hunting.
+      </p>
+
+      <ol class="workflow-steps">
+        <li>
+          <strong>Open the Inbuilt File Browser (<span class="key-badge">Ctrl+B</span>):</strong> Navigate to your show turnover directory (e.g., <code>/shows/feature_vfx/dailies/2026_10_13/</code>) and click <em>Bookmark Current Folder</em> so the path is permanently pinned for future sessions. Notice how OpenReview automatically collapses multi-thousand-frame EXR/DPX folders into single sequence entries (e.g., <code>sh010_comp_v004.####.exr [1001–1085]</code>).
+        </li>
+        <li>
+          <strong>Assemble Hierarchical Shot Bins (<span class="key-badge">`</span>):</strong> Drag and drop multiple sequences into the left <strong>Sources &amp; Session Manager Dock</strong>. Click <em>New Folder</em> to organize shots by sequence (<code>SEQ_010</code>, <code>SEQ_020</code>) or department (<code>Comp</code>, <code>Lighting</code>, <code>FX</code>).
+        </li>
+        <li>
+          <strong>Build a Continuous Editorial Sequence Playlist:</strong> In the Sources panel, create a <strong>Sequence View</strong> and add your daily shots in story order. Switch the timeline to <em>Sequence Mode</em> to play all shots back-to-back seamlessly like an editorial cut, or press <span class="key-badge">PageDown</span> / <span class="key-badge">PageUp</span> to jump clip-by-clip.
+        </li>
+        <li>
+          <strong>Instant Pipeline Version Stepping (<span class="key-badge">Alt+Up</span> / <span class="key-badge">Alt+Down</span>):</strong> While inspecting <code>sh010_comp_v004.####.exr</code> on frame <code>1042</code>, press <span class="key-badge">Alt+Down</span> to immediately swap the reader to <code>sh010_comp_v003.####.exr</code> on the exact same frame <code>1042</code> and zoom/pan coordinates. Press <span class="key-badge">Alt+Up</span> to return to <code>v004</code>.
+        </li>
+        <li>
+          <strong>Save Session State (<span class="key-badge">Ctrl+S</span>) or Clear (<span class="key-badge">Ctrl+Shift+N</span>):</strong> Save the assembled playlist, color grades, and supervisor notes to a portable <code>.ovr</code> file, or press <span class="key-badge">Ctrl+Shift+N</span> after the review to close and clear the session memory for the next department turnover.
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 2: PLATE VS COMP QC & EDGE INSPECTION -->
+      <!-- ================================================================== -->
+      <h2 id="wf-comp-qc">2. Plate vs. Comp Comparison, Angled Wipes &amp; Difference QC</h2>
+      <p>
+        Before publishing a composite for supervisor approval, compositors must verify that background plate grain, black levels, lens distortion outside the roto mask, and hair/motion-blur edges have not been degraded.
+      </p>
+
+      <figure class="doc-figure">
+        <img src="assets/screenshots/viewport_ab_wipe_mode.png" alt="Plate vs Comp A/B Wipe Comparison">
+        <figcaption><strong>Figure 2.1:</strong> Inspecting composite integration against the original scan plate using an angled A/B Split Wipe (<span class="key-badge">W</span>) and the floating Wipe Controller HUD.</figcaption>
+      </figure>
+
+      <ol class="workflow-steps">
+        <li>
+          <strong>Assign Primary (Slot A) and Reference (Slot B) Media:</strong> Load your latest Nuke composite render as Primary Slot A, and assign the ungraded original camera scan plate (or previous approved version) as Reference Slot B via the Sources Panel or Wipe HUD.
+        </li>
+        <li>
+          <strong>Engage Interactive Split Wipe (<span class="key-badge">W</span>):</strong> Press <span class="key-badge">W</span> to activate the split wipe line. Drag the line directly across actor hair edges and greenscreen despill boundaries. Drag near the wipe handle to rotate the split angle (e.g., <code>15°</code> or <code>45°</code>) to align with diagonal horizon lines or light sabers. Use <span class="key-badge">Shift+W</span> to flip orientation or <span class="key-badge">Alt+W</span> to reset to center.
+        </li>
+        <li>
+          <strong>Verify Zero Unintended Plate Alteration via Difference Mode:</strong> Switch the comparison mode in the Wipe HUD (or <em>Review &rarr; View Type</em>) to <strong>Difference</strong> or <strong>Difference (Inverted)</strong>. Increase the <strong>Diff Boost</strong> multiplier slider (up to <code>20x</code>). Any area outside your roto/key matte that is not pure black (in Difference) or pure white (in Inverted Difference) immediately reveals accidental crop shifts, premult errors, or color space mismatches.
+        </li>
+        <li>
+          <strong>Inspect Raw Pixel Grain &amp; Black Toe (<span class="key-badge">N</span> &amp; <span class="key-badge">Shift+I</span>):</strong> Zoom in to <code>400%</code> (<span class="key-badge">Ctrl+4</span>) or <code>800%</code> (<span class="key-badge">Ctrl+8</span>), press <span class="key-badge">N</span> to switch from Bilinear smoothing to <strong>Nearest-Neighbor Pixelated</strong> mode, solo the <strong>Blue Channel (<span class="key-badge">B</span>)</strong> (where film/digital sensor noise is strongest), and press <span class="key-badge">Shift+I</span> (<strong>Invert Colors</strong>) or boost Gamma (<span class="key-badge">Shift++</span>) to verify that synthetic grain matches the plate seamlessly.
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 3: MULTI-LAYER STACKING & TILED CONTACT SHEETS -->
+      <!-- ================================================================== -->
+      <h2 id="wf-stacks-layouts">3. Multi-Layer Stacking &amp; Multi-Tile Contact Sheet Layouts</h2>
+      <p>
+        When comparing 4+ lighting wedges, FX turbulence seeds, or continuity across an entire 9-shot sequence simultaneously, OpenReview provides <strong>Stacks</strong> and <strong>Layouts</strong> inside the <code>SessionGraph</code>.
+      </p>
+
+      <ol class="workflow-steps">
+        <li>
+          <strong>Create a Multi-Layer Stack for Rapid Take Cycling (<span class="key-badge">Z</span> / <span class="key-badge">Shift+Z</span>):</strong> Select multiple render versions or FX wedges in the Sources dock and create a <strong>Stack View</strong>. While playing or paused on a hero frame, tap <span class="key-badge">Z</span> (Cycle Forward) and <span class="key-badge">Shift+Z</span> (Cycle Backward) to flip between all layers in the stack with zero frame-reload latency.
+        </li>
+        <li>
+          <strong>Build a Tiled Contact Sheet Layout for Sequence Continuity:</strong> Select all shots in a sequence and create a <strong>Layout View</strong>. Choose between <code>Auto Grid</code>, <code>Side-by-Side (1xN)</code>, <code>Over/Under (Nx1)</code>, <code>2x2</code>, or <code>3x3</code> grid modes in the Sources Panel or <strong>Media Stacking &amp; Layout HUD</strong>.
+        </li>
+        <li>
+          <strong>Optimize Multi-Stream Contact Sheet Performance:</strong> When playing 9 simultaneous 4K EXR sequences in a <code>3x3</code> layout, set the Layout Scale dropdown to <code>50%</code> or <code>25%</code> so the <code>LayoutCompositor</code> (<code>core/layout_compositor.py</code>) composites tiles at real-time 24/60 FPS.
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 4: ACES / OCIO COLOR, LUT/CDL & ZEBRA QC -->
+      <!-- ================================================================== -->
+      <h2 id="wf-color-ocio">4. ACES / OpenColorIO v2 Color Pipeline, Show LUTs, ASC CDL &amp; Zebra QC</h2>
+      <p>
+        Modern feature film pipelines render in scene-linear <code>ACEScg</code> and evaluate shots under show-specific 3D LUTs and per-shot ASC CDL grades from the Digital Intermediate (DI) house.
+      </p>
+
+      <ol class="workflow-steps">
+        <li>
+          <strong>Configure Studio OCIO v2 Config:</strong> Open <em>Color &rarr; OpenColorIO Configuration...</em> (or set the <code>$OCIO</code> environment variable). Select your studio <code>config.ocio</code>, choose the calibrated display device (e.g., <code>ACES 1.3 - SDR Video (Rec.709)</code>), and verify that OpenReview auto-tags incoming <code>.exr</code> files as <code>ACEScg</code> and <code>.dpx</code> files as <code>Cineon Log</code>.
+        </li>
+        <li>
+          <strong>Apply Show 3D LUT &amp; Shot ASC CDL Grade:</strong> Navigate to <em>Color &rarr; LUT / CDL</em> and load the show's <code>.cube</code> or <code>.3dl</code> look LUT alongside the shot's <code>.cdl</code> / <code>.cc</code> / <code>.ccc</code> file. Use the checkable <em>Enable Active LUT</em> and <em>Enable Active CDL</em> menu items to A/B toggle the DI grade on and off during playback.
+        </li>
+        <li>
+          <strong>Interactive ExposureSweep &amp; Highlight Clipping Check:</strong> Sweep exposure down by 3 stops (<span class="key-badge">Alt+-</span> repeatedly) to verify that bright emissive FX (explosions, engine thrusters, sky domes) contain full high-dynamic-range detail rather than flat clipped values. Enable <em>View &rarr; Show Out-of-Range Colors</em> to highlight any super-white (<code>&gt; 1.0</code>) pixels in Magenta or negative values (<code>&lt; 0.0</code>) in Cyan.
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 5: 32-BIT PIXEL PROBE & NAN/INF HUNTING -->
+      <!-- ================================================================== -->
+      <h2 id="wf-pixel-probe">5. 32-Bit Floating-Point Pixel Probe, Area Samplers &amp; Corrupted Pixel QC</h2>
+      <p>
+        A single <code>NaN</code> (Not-a-Number), <code>Infinity</code>, or negative sub-zero pixel from a division-by-zero shader or bad filter kernel can ruin a 3D LUT evaluation or produce black boxes when convolved with a defocus/glare node.
+      </p>
+
+      <ol class="workflow-steps">
+        <li>
+          <strong>Launch the Pixel Color Inspector HUD (<span class="key-badge">F5</span>) &amp; Histogram (<span class="key-badge">H</span>):</strong> Press <span class="key-badge">F5</span> and <span class="key-badge">H</span> to bring up the real-time color analysis HUDs.
+        </li>
+        <li>
+          <strong>Pin Persistent Point &amp; Area Box Samplers:</strong> Click the <em>Eyedropper</em> button in the Color Inspector HUD. Click key reference surfaces (e.g., skin tone, grey ball, chrome ball, deepest shadow) to pin persistent numbered samplers, or click-and-drag a rectangular box across a sky or greenscreen region to monitor live <strong>Min / Max / Mean</strong> floating-point RGBA values across the entire shot duration.
+        </li>
+        <li>
+          <strong>Verify Zero NaN / Inf / Negative Pixels:</strong> Watch the diagnostic status badges (<code>NaN: 0</code>, <code>Inf: 0</code>, <code>Neg: 0</code>) in the Color Inspector HUD. If any badge turns red with a non-zero count, isolate channels (<span class="key-badge">R</span>, <span class="key-badge">G</span>, <span class="key-badge">B</span>, <span class="key-badge">A</span>) and use the area sampler to pinpoint the exact pixel coordinates for repair in Nuke or Houdini.
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 6: MULTI-PASS CG EXR AOV INSPECTION -->
+      <!-- ================================================================== -->
+      <h2 id="wf-exr-aov">6. Multi-Pass CG OpenEXR Render Layer (AOV) Inspection</h2>
+      <ol class="workflow-steps">
+        <li>
+          <strong>Load Multi-Part EXR Sequence:</strong> Open a rendered CG sequence from Arnold, Karma, RenderMan, or V-Ray.
+        </li>
+        <li>
+          <strong>Open the EXR Multilayer Pass Inspector HUD:</strong> Toggle the EXR Passes HUD to view all embedded channels and layers (e.g., <code>RGBA</code>, <code>diffuse_direct</code>, <code>diffuse_indirect</code>, <code>specular_direct</code>, <code>coat</code>, <code>transmission</code>, <code>emission</code>, <code>N</code>, <code>P</code>, <code>Z</code>, <code>crypto_asset</code>).
+        </li>
+        <li>
+          <strong>Diagnose Noise &amp; Fireflies Per Pass:</strong> Click through individual lighting AOVs while playing the sequence in loop mode. If fireflies appear in the beauty render, isolating <code>specular_indirect</code> vs. <code>transmission</code> immediately tells the lighting artist which sampling parameter to increase—saving hours of unnecessary global AA re-renders.
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 7: STEREOSCOPIC 3D CONVERGENCE QC -->
+      <!-- ================================================================== -->
+      <h2 id="wf-stereo">7. Stereoscopic 3D Convergence, Disparity &amp; Ghosting QC</h2>
+      <ol class="workflow-steps">
+        <li>
+          <strong>Select Stereo 3D Mode:</strong> From the Top Control Bar or <em>View &rarr; Stereo 3D</em> menu (or the <strong>Stereoscopic 3D HUD</strong>), switch between <code>Left Eye</code>, <code>Right Eye</code>, <code>Anaglyph (Red-Cyan)</code>, <code>Side-by-Side (Split)</code>, and <code>Stereo Difference</code>.
+        </li>
+        <li>
+          <strong>Check Vertical Alignment &amp; Retinal Rivalry:</strong> In <code>Stereo Difference</code> or <code>Anaglyph</code> mode, verify that vertical disparity is zero and check specular reflections or water elements for uncomfortable retinal rivalry between eyes.
+        </li>
+        <li>
+          <strong>Adjust Horizontal Disparity Convergence:</strong> Use the horizontal pixel offset slider in the Stereoscopic 3D HUD to test depth plane placement and screen-plane convergence comfort in real time.
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 8: SUPERVISORY MARKUP, NOTES & EXPORT -->
+      <!-- ================================================================== -->
+      <h2 id="wf-annotations">8. Supervisory Vector Markup, Review Notes &amp; Annotated Export Pipeline</h2>
+      <figure class="doc-figure">
+        <img src="assets/screenshots/viewport_annotations_huds.png" alt="Supervisory Vector Annotations and Review Notes">
+        <figcaption><strong>Figure 8.1:</strong> Drawing frame-accurate vector arrows, circles, and text callouts on frame <code>1024</code> using the Floating Annotation Palette (<span class="key-badge">X</span>).</figcaption>
+      </figure>
+
+      <ol class="workflow-steps">
+        <li>
+          <strong>Draw Vector Callouts (<span class="key-badge">X</span> &amp; <span class="key-badge">D</span>):</strong> Press <span class="key-badge">X</span> to open the top Annotation Capsule Palette (or press <span class="key-badge">D</span> to jump straight into Freehand Pen mode). Sketch paint-overs, draw directional Arrows to point out tracking slips, place Circles around rig removals, and select the <strong>Text Tool</strong> to type callouts directly on the canvas.
+        </li>
+        <li>
+          <strong>Navigate &amp; Manage Annotated Keyframes (<span class="key-badge">,</span> / <span class="key-badge">.</span> &amp; <span class="key-badge">Ctrl+Shift+A</span>):</strong> Step rapidly between annotated frames using <span class="key-badge">,</span> and <span class="key-badge">.</span>. Press <span class="key-badge">Ctrl+Shift+A</span> to open the <strong>Annotation &amp; Review Notes Manager</strong>, where you can type detailed multi-line supervisor notes per frame.
+        </li>
+        <li>
+          <strong>Export Review Reports &amp; Burned-In Media (<span class="key-badge">Ctrl+Shift+E</span>):</strong>
+          <ul>
+            <li>In the Annotation Manager, export structured review notes to <code>CSV</code> (for ShotGrid/spreadsheet import), <code>JSON</code>, or a formatted <code>Markdown</code> document.</li>
+            <li>Press <span class="key-badge">Ctrl+Shift+E</span> to open the <strong>Export Media Dialog</strong>, choose <em>Annotated Frames Only</em> (or <em>Full Sequence</em> / <em>In-Out Range</em>), check <strong>Burn-In Annotations &amp; Color Grading</strong>, and export reference PNGs or a QuickTime <code>.mov</code> for the artist.</li>
+          </ul>
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 9: MULTI-USER REMOTE DAILIES SYNC -->
+      <!-- ================================================================== -->
+      <h2 id="wf-remote-sync">9. Multi-User Remote Dailies Collaboration Across Workstations</h2>
+      <ol class="workflow-steps">
+        <li>
+          <strong>Start Hosting a Dailies Room (<span class="key-badge">Ctrl+Shift+D</span>):</strong> The Dailies Coordinator or VFX Supervisor presses <span class="key-badge">Ctrl+Shift+D</span> to open the <strong>Remote Dailies Sync HUD</strong>, enters a Room Name (e.g., <code>SEQ010_Morning_Dailies</code>) and Username, and clicks <em>Host Session</em> on TCP port <code>9090</code>.
+        </li>
+        <li>
+          <strong>Peers Connect &amp; Auto-Match Local High-Res Media:</strong> Remote artists open the same panel, enter the Host IP and Port, and click <em>Connect</em>. When the Host loads a shot, each peer's OpenReview instance resolves and loads the matching uncompressed sequence from their local/SAN storage.
+        </li>
+        <li>
+          <strong>Synchronized Playback, Live Whiteboard &amp; Presenter Hand-Off:</strong> As the Presenter plays, pauses, scrubs, or adjusts Exposure/Gamma, every connected artist's viewport updates in real time. Any participant can draw vector annotations on the shared frame or type in the room chat. If an artist wants to show an issue, the Host clicks <em>Make Presenter</em> to hand over transport control.
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 10: AUDIO SYNC & LIP-SYNC CALIBRATION -->
+      <!-- ================================================================== -->
+      <h2 id="wf-audio-sync">10. Dialogue Lip-Sync QC &amp; Audio Offset Calibration</h2>
+      <ol class="workflow-steps">
+        <li>
+          <strong>Load Video with Audio or Pair External WAV Stem:</strong> Open a QuickTime <code>.mov</code> or load an external <code>.wav</code> dialogue stem alongside an image sequence.
+        </li>
+        <li>
+          <strong>Scrub Phonemes with 60ms Audio Bursts:</strong> Ensure <em>Audio &rarr; Audio Scrubbing on Drag</em> is checked. Drag the timeline playhead (or scrub horizontally on the viewport canvas) across character dialogue—OpenReview plays a crisp 60ms audio slice on each frame so animators can verify exact jaw/lip sync on plosive consonants (<em>P, B, T, K</em>).
+        </li>
+        <li>
+          <strong>Calibrate Editorial Handle Offsets:</strong> If the audio stem includes a 2-second 2-pop leader or 8-frame head handle, open <em>Audio &rarr; Offset Audio...</em> and enter the exact <strong>Offset (Seconds)</strong> or <strong>Offset (Frames)</strong>. The <code>AudioEngine</code> recalculates frame alignment immediately and maintains sub-frame lock within a 45ms drift window.
+        </li>
+      </ol>
+
+      <!-- ================================================================== -->
+      <!-- WORKFLOW 11: CLIENT & DIRECTOR PRESENTATION MODE -->
+      <!-- ================================================================== -->
+      <h2 id="wf-presentation">11. Executive, Director &amp; Client Presentation Screening</h2>
+      <ol class="workflow-steps">
+        <li>
+          <strong>Engage Theatrical Aspect Ratio Matte (<span class="key-badge">Ctrl+M</span> &amp; <span class="key-badge">Shift+M</span>):</strong> Press <span class="key-badge">Ctrl+M</span> to select the production's theatrical framing (e.g., <code>2.35:1 Cinemascope</code> or <code>1.85:1 Flat</code>) and press <span class="key-badge">Shift+M</span> until the matte opacity is <code>100%</code> solid black.
+        </li>
+        <li>
+          <strong>Enter Borderless Fullscreen (<span class="key-badge">F12</span>) &amp; Presentation Mode (<span class="key-badge">Ctrl+P</span>):</strong> Press <span class="key-badge">F12</span> and <span class="key-badge">Ctrl+P</span>. All window borders, menu bars, top toolbars, side docks, timelines, and status bars vanish—leaving only the pure color-calibrated image centered on a pitch-black screen.
+        </li>
+        <li>
+          <strong>Drive Screening Completely via Hotkeys:</strong> Use <span class="key-badge">Space</span>, <span class="key-badge">J</span>/<span class="key-badge">K</span>/<span class="key-badge">L</span> shuttling, <span class="key-badge">PageDown</span>/<span class="key-badge">PageUp</span> (next/previous shot), and <span class="key-badge">Alt+Up</span>/<span class="key-badge">Alt+Down</span> (version stepping) without ever exposing UI chrome to the client. Press <span class="key-badge">Ctrl+P</span> or <span class="key-badge">Escape</span> to restore the workspace.
+        </li>
+      </ol>
+
+    </main>
+  </div>
+
+  <footer class="docs-footer">
+    <strong>OpenReview v0.1.0</strong> &bull; Authored by <strong>Maruthu Chakravarthi</strong> &bull; Professional VFX Review &amp; Playback Workstation Documentation
+  </footer>
+
+</body>
+</html>

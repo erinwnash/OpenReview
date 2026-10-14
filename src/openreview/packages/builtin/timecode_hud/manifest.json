@@ -1,0 +1,9 @@
+{
+  "name": "timecode-hud-overlay",
+  "version": "1.0.0",
+  "author": "OpenReview Team",
+  "description": "Built-in extension demonstrating plugin hooks, frame advancement monitoring, and metadata tracking.",
+  "entrypoint": "plugin.py",
+  "min_openreview_version": "0.1.0",
+  "enabled": true
+}

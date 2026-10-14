@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 160" role="img" aria-labelledby="title desc">
+  <title id="title">Openreview minimal logo</title>
+  <desc id="desc">Minimal Openreview logo with an open viewing frame and play cue</desc>
+  <!-- The four corner strokes form an open review frame; the triangle is the playback/viewing cue. -->
+  <g id="symbol" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M66 30H42a12 12 0 0 0-12 12v24M94 30h24a12 12 0 0 1 12 12v24M30 94v24a12 12 0 0 0 12 12h24M130 94v24a12 12 0 0 1-12 12H94" stroke="#38D9C6" stroke-width="12"/>
+    <path d="m69 59 39 21-39 21Z" fill="#F8FAFC" stroke="#F8FAFC" stroke-width="4"/>
+  </g>
+  <g id="wordmark" fill="#F8FAFC">
+    <text x="174" y="99" font-family="Inter, Arial, Helvetica, sans-serif" font-size="66" font-weight="600" letter-spacing="-2.8">Openreview</text>
+  </g>
+</svg>

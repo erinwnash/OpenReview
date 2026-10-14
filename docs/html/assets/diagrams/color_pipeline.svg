@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 340" width="100%" height="auto" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, sans-serif">
+  <defs>
+    <linearGradient id="bgPipe" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141414"/>
+      <stop offset="100%" stop-color="#1b1b1b"/>
+    </linearGradient>
+    <marker id="arrowFlow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#e5a823"/>
+    </marker>
+  </defs>
+
+  <rect width="1120" height="340" rx="10" fill="url(#bgPipe)" stroke="#333333" stroke-width="1.5"/>
+  <text x="28" y="34" fill="#e5a823" font-size="14" font-weight="700" letter-spacing="0.8">9-STAGE GLSL FRAGMENT SHADER COLOR &amp; COMPOSITING PIPELINE (60+ FPS ZERO-LATENCY)</text>
+
+  <!-- Row 1: Stages 1 to 5 -->
+  <rect x="24" y="54" width="196" height="110" rx="6" fill="#222222" stroke="#4dabf7" stroke-width="1.2"/>
+  <text x="36" y="76" fill="#4dabf7" font-size="12" font-weight="700">1. Texture Sampling &amp; Stereo</text>
+  <text x="36" y="96" fill="#cccccc" font-size="11">• Sample Slot A &amp; Slot B</text>
+  <text x="36" y="114" fill="#cccccc" font-size="11">• Stereo 3D Anaglyph / Split</text>
+  <text x="36" y="132" fill="#cccccc" font-size="11">• Horizontal Disparity Offset</text>
+  <text x="36" y="150" fill="#888888" font-size="10" font-family="monospace">uTextureA / uTextureB</text>
+
+  <rect x="244" y="54" width="196" height="110" rx="6" fill="#222222" stroke="#e5a823" stroke-width="1.2"/>
+  <text x="256" y="76" fill="#e5a823" font-size="12" font-weight="700">2. A/B Wipe &amp; Stack Blend</text>
+  <text x="256" y="96" fill="#cccccc" font-size="11">• Angled Split Wipe Plane</text>
+  <text x="256" y="114" fill="#cccccc" font-size="11">• Over / Add / Difference</text>
+  <text x="256" y="132" fill="#cccccc" font-size="11">• Inverted Diff + Diff Boost</text>
+  <text x="256" y="150" fill="#888888" font-size="10" font-family="monospace">uCompareMode • uWipeAngle</text>
+
+  <rect x="464" y="54" width="196" height="110" rx="6" fill="#222222" stroke="#e5a823" stroke-width="1.2"/>
+  <text x="476" y="76" fill="#e5a823" font-size="12" font-weight="700">3. Input Space Linearization</text>
+  <text x="476" y="96" fill="#cccccc" font-size="11">• Cineon / DPX 10-bit Log</text>
+  <text x="476" y="114" fill="#cccccc" font-size="11">• ARRI ALEXA LogC v3 Curve</text>
+  <text x="476" y="132" fill="#cccccc" font-size="11">• sRGB / Rec.709 / Gamma 2.2</text>
+  <text x="476" y="150" fill="#888888" font-size="10" font-family="monospace">To Scene-Linear (ACEScg)</text>
+
+  <rect x="684" y="54" width="196" height="110" rx="6" fill="#222222" stroke="#e5a823" stroke-width="1.2"/>
+  <text x="696" y="76" fill="#e5a823" font-size="12" font-weight="700">4. Scene-Linear Exposure</text>
+  <text x="696" y="96" fill="#cccccc" font-size="11">• F-Stop Exposure (2^EV)</text>
+  <text x="696" y="114" fill="#cccccc" font-size="11">• Linear Gain Multiplier</text>
+  <text x="696" y="132" fill="#cccccc" font-size="11">• Pre-Grade Offset Add</text>
+  <text x="696" y="150" fill="#888888" font-size="10" font-family="monospace">rgb *= uGain * exp2(uEV)</text>
+
+  <rect x="904" y="54" width="192" height="110" rx="6" fill="#222222" stroke="#e5a823" stroke-width="1.2"/>
+  <text x="916" y="76" fill="#e5a823" font-size="12" font-weight="700">5. ASC CDL &amp; 3D LUT</text>
+  <text x="916" y="96" fill="#cccccc" font-size="11">• SOP: pow(rgb*S + O, P)</text>
+  <text x="916" y="114" fill="#cccccc" font-size="11">• Hardware 3D Texture LUT</text>
+  <text x="916" y="132" fill="#cccccc" font-size="11">• Trilinear .cube / .3dl</text>
+  <text x="916" y="150" fill="#888888" font-size="10" font-family="monospace">uLut3D • uCdlSlope/Power</text>
+
+  <!-- Row 2: Stages 6 to 9 -->
+  <rect x="24" y="198" width="248" height="114" rx="6" fill="#222222" stroke="#69db7c" stroke-width="1.2"/>
+  <text x="36" y="220" fill="#69db7c" font-size="12" font-weight="700">6. Contrast, Hue &amp; Saturation</text>
+  <text x="36" y="240" fill="#cccccc" font-size="11">• 18% Grey Pivot Contrast</text>
+  <text x="36" y="258" fill="#cccccc" font-size="11">• Hue Matrix Rotation (-180°..180°)</text>
+  <text x="36" y="276" fill="#cccccc" font-size="11">• Rec.709 Luma-Preserving Sat</text>
+  <text x="36" y="294" fill="#888888" font-size="10" font-family="monospace">Y = 0.2126R + 0.7152G + 0.0722B</text>
+
+  <rect x="296" y="198" width="252" height="114" rx="6" fill="#222222" stroke="#69db7c" stroke-width="1.2"/>
+  <text x="308" y="220" fill="#69db7c" font-size="12" font-weight="700">7. OCIO v2 Display &amp; Gamma</text>
+  <text x="308" y="240" fill="#cccccc" font-size="11">• ACES 1.3 / 2.0 SDR Filmic Tone Map</text>
+  <text x="308" y="258" fill="#cccccc" font-size="11">• sRGB / Rec.709 / Gamma 2.2 OETF</text>
+  <text x="308" y="276" fill="#cccccc" font-size="11">• Display Gamma (1/γ) &amp; Brightness</text>
+  <text x="308" y="294" fill="#888888" font-size="10" font-family="monospace">uViewTransform • uGamma</text>
+
+  <rect x="572" y="198" width="252" height="114" rx="6" fill="#222222" stroke="#ff6b6b" stroke-width="1.2"/>
+  <text x="584" y="220" fill="#ff6b6b" font-size="12" font-weight="700">8. Invert &amp; Out-of-Range Zebra</text>
+  <text x="584" y="240" fill="#cccccc" font-size="11">• Display-Space Invert (Shift+I)</text>
+  <text x="584" y="258" fill="#cccccc" font-size="11">• Super-White (&gt;1.0) Magenta Alert</text>
+  <text x="584" y="276" fill="#cccccc" font-size="11">• Sub-Zero (&lt;0.0) Cyan Alert</text>
+  <text x="584" y="294" fill="#888888" font-size="10" font-family="monospace">uInvertColors • uShowOutOfRange</text>
+
+  <rect x="848" y="198" width="248" height="114" rx="6" fill="#222222" stroke="#4dabf7" stroke-width="1.2"/>
+  <text x="860" y="220" fill="#4dabf7" font-size="12" font-weight="700">9. Channel Solo &amp; Alpha Matte</text>
+  <text x="860" y="240" fill="#cccccc" font-size="11">• Full RGB (C), Red (R), Green (G)</text>
+  <text x="860" y="258" fill="#cccccc" font-size="11">• Blue (B), Alpha (A), Luma (Y)</text>
+  <text x="860" y="276" fill="#cccccc" font-size="11">• Checkerboard / Grey / Black BG</text>
+  <text x="860" y="294" fill="#888888" font-size="10" font-family="monospace">uChannelMode • FragColor</text>
+
+  <!-- Connectors -->
+  <line x1="220" y1="109" x2="238" y2="109" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowFlow)"/>
+  <line x1="440" y1="109" x2="458" y2="109" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowFlow)"/>
+  <line x1="660" y1="109" x2="678" y2="109" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowFlow)"/>
+  <line x1="880" y1="109" x2="898" y2="109" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowFlow)"/>
+  <path d="M 1000 164 L 1000 180 L 148 180 L 148 192" fill="none" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowFlow)"/>
+  <line x1="272" y1="255" x2="290" y2="255" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowFlow)"/>
+  <line x1="548" y1="255" x2="566" y2="255" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowFlow)"/>
+  <line x1="824" y1="255" x2="842" y2="255" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowFlow)"/>
+</svg>

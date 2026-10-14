@@ -1,0 +1,79 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging / build artifacts
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# OpenReview standalone build artifacts & distributions
+# (Installer binaries and archives are hosted via GitHub Releases)
+Openreview_build/
+*.msi
+*.cab
+*.deb
+*.rpm
+
+# PyInstaller temporary files
+*.manifest
+*.spec.bak
+
+# Unit test / coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Environments & Virtualenv
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Logs and databases
+*.log
+*.sqlite3
+
+# IDE / Editor artifacts
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini

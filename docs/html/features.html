@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenReview - Exhaustive Features &amp; Keyboard Shortcuts Reference</title>
+  <link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+  <header class="docs-header">
+    <a href="index.html" class="brand">
+      <span>Open<span class="accent">Review</span></span>
+      <span class="brand-meta">v0.1.0 • By Maruthu Chakravarthi</span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html">Application &amp; Architecture</a></li>
+      <li><a href="features.html" class="active">Features &amp; Shortcuts</a></li>
+      <li><a href="use_cases.html">Use Cases &amp; Workflows</a></li>
+      <li><a href="sdk.html">Python SDK, DCC &amp; Plugins</a></li>
+    </ul>
+  </header>
+
+  <div class="page-wrapper">
+    <!-- Sticky Sidebar TOC -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-title">Features &amp; Shortcuts</div>
+      <ul class="toc-list">
+        <li><a href="#feat-playback">1. Playback, JKL Shuttle &amp; Timecode</a></li>
+        <li><a href="#feat-caching">2. RAM Caching &amp; GPU Acceleration</a></li>
+        <li><a href="#feat-color">3. Color Science, LUT/CDL &amp; OCIO v2</a></li>
+        <li><a href="#feat-comparison">4. A/B Wipes, Diffs, Stacks &amp; Layouts</a></li>
+        <li><a href="#feat-viewport">5. Viewport Geometry, Mattes &amp; Guides</a></li>
+        <li><a href="#feat-inspector">6. 32-Bit Pixel Probe &amp; Histogram</a></li>
+        <li><a href="#feat-annotations">7. Vector Annotations &amp; Review Notes</a></li>
+        <li><a href="#feat-versioning">8. Pipeline Versioning &amp; Sessions</a></li>
+        <li><a href="#feat-exr-stereo">9. Multi-Pass EXR &amp; Stereo 3D</a></li>
+        <li><a href="#feat-audio-sync">10. Audio Sync &amp; Remote Dailies</a></li>
+        <li><a href="#feat-export-ext">11. Export, SDK &amp; Plugin System</a></li>
+        <li><a href="#shortcuts-registry">12. Complete Keyboard Shortcuts (All 78+)</a></li>
+        <li><a href="#sc-playback" class="sub-link">12.1 Playback &amp; Transport</a></li>
+        <li><a href="#sc-channels" class="sub-link">12.2 Channel Isolation</a></li>
+        <li><a href="#sc-view" class="sub-link">12.3 View, Zoom &amp; Mattes</a></li>
+        <li><a href="#sc-color" class="sub-link">12.4 Color, Exposure &amp; Invert</a></li>
+        <li><a href="#sc-timeline" class="sub-link">12.5 Timeline &amp; Timecode</a></li>
+        <li><a href="#sc-marking" class="sub-link">12.6 Marking &amp; Bookmarks</a></li>
+        <li><a href="#sc-stack" class="sub-link">12.7 Stacking &amp; Versioning</a></li>
+        <li><a href="#sc-huds" class="sub-link">12.8 HUDs &amp; Floating Panels</a></li>
+        <li><a href="#sc-annot" class="sub-link">12.9 Vector Annotations</a></li>
+        <li><a href="#sc-sessions" class="sub-link">12.10 Sessions, Cache &amp; App</a></li>
+        <li><a href="#sc-mouse" class="sub-link">12.11 Mouse &amp; Modifier Bindings</a></li>
+      </ul>
+    </aside>
+
+    <main class="docs-container">
+      <div class="hero-header-row">
+        <span class="hero-badge">Exhaustive Feature &amp; Hotkey Encyclopedia</span>
+        <span class="author-badge">Author: Maruthu Chakravarthi</span>
+      </div>
+      <h1>Complete Features &amp; Keyboard Shortcuts Guide</h1>
+      <p>
+        This manual documents every single capability in <strong>OpenReview</strong>—both foundational studio features and newly introduced enhancements—followed by the complete, searchable <strong>78+ action RV / Nuke / 3DEqualizer hybrid keyboard shortcut registry</strong>.
+      </p>
+
+      <!-- ================================================================== -->
+      <!-- 1. PLAYBACK, JKL SHUTTLE & TIMECODE -->
+      <!-- ================================================================== -->
+      <h2 id="feat-playback">1. Playback Engine, JKL Shuttling &amp; Timecode</h2>
+      <div class="card-grid">
+        <div class="card">
+          <h4>🎬 Real-Time vs. Play All Frames</h4>
+          <p>Switch seamlessly between <strong>Wall-Clock Real-Time Sync</strong> (drops frames if disk I/O lags to maintain exact audio/timecode duration) and <strong>Play Every Frame</strong> (guarantees every single frame is displayed sequentially for VFX simulation QC).</p>
+        </div>
+        <div class="card">
+          <h4>⏩ JKL Multi-Speed Shuttling</h4>
+          <p>Tap <span class="key-badge">L</span> repeatedly to accelerate forward playback through <code>1x</code>, <code>2x</code>, <code>4x</code>, and <code>8x</code>. Tap <span class="key-badge">K</span> to halt immediately. Tap <span class="key-badge">J</span> repeatedly to shuttle in reverse at <code>-1x</code>, <code>-2x</code>, <code>-4x</code>, and <code>-8x</code>.</p>
+        </div>
+        <div class="card">
+          <h4>🔁 Three Loop Modes</h4>
+          <p>Cycle playback boundary behavior on the timeline: <strong>Loop</strong> (wrap around continuously), <strong>Ping-Pong</strong> (bounce forward and backward seamlessly across the In/Out range), and <strong>Play Once</strong> (halt automatically on the last frame).</p>
+        </div>
+        <div class="card">
+          <h4>⏱️ SMPTE Timecode &amp; Go-To Frame</h4>
+          <p>Toggle timeline readouts between integer Frame Numbers (e.g. <code>1024</code>) and SMPTE Timecode (<code>01:00:00:23</code>) with <span class="key-badge">Ctrl+T</span>. Press <span class="key-badge">Ctrl+G</span> to open the frameless Go-To Frame HUD with auto-range clamping.</p>
+        </div>
+      </div>
+
+      <ul>
+        <li><strong>Interactive Canvas Scrubbing:</strong> When the <em>Canvas Scrub</em> mode icon is active in the Top Control Bar, dragging horizontally with the Left Mouse Button anywhere on the viewport scrubs smoothly across frames—ideal for rapid back-and-forth edge inspection.</li>
+        <li><strong>Timeline Magnifier Mini-Ruler (<span class="key-badge">Shift+T</span>):</strong> Toggles a high-precision zoomed scrub strip above the main timeline so you can step frame-by-frame even inside 10,000-frame master reels.</li>
+        <li><strong>In/Out Range Clamping &amp; Bookmark Segments:</strong> Set custom playback brackets with <span class="key-badge">[</span> (Mark In) and <span class="key-badge">]</span> (Mark Out), clear individually with <span class="key-badge">Alt+I</span> / <span class="key-badge">Alt+O</span>, or clear both with <span class="key-badge">\</span>. Press <span class="key-badge">PageDown</span> / <span class="key-badge">PageUp</span> to step the active In/Out loop bracket across consecutive bookmarked segments or sequence clips.</li>
+      </ul>
+
+      <!-- ================================================================== -->
+      <!-- 2. RAM CACHING & GPU ACCELERATION -->
+      <!-- ================================================================== -->
+      <h2 id="feat-caching">2. Asynchronous RAM Caching &amp; Hardware GPU Acceleration</h2>
+      <ul>
+        <li><strong>Four RAM Cache Modes:</strong>
+          <ol>
+            <li><strong>Cache Off:</strong> Direct on-demand disk streaming without background prefetching.</li>
+            <li><strong>Play-Ahead Cache:</strong> Dynamically caches a moving window around the playhead (80% ahead in the current playback direction, 20% behind).</li>
+            <li><strong>In/Out Region Cache (<span class="key-badge">Shift+C</span>):</strong> Dedicates the worker thread pool to caching every frame inside the marked <code>[In .. Out]</code> range.</li>
+            <li><strong>Cache All:</strong> Prefetches the entire clip or multi-clip sequence up to the configured RAM ceiling (1 GB – 64 GB).</li>
+          </ol>
+        </li>
+        <li><strong>Granular Cache Flushing &amp; Disk Reloading:</strong>
+          <ul>
+            <li><strong>Reload Current Frame (<span class="key-badge">Ctrl+R</span>):</strong> Evicts only the current frame from RAM and re-reads it from disk (ideal when re-rendering a single bad frame in Nuke).</li>
+            <li><strong>Reload Active Sequence (<span class="key-badge">Ctrl+Shift+R</span>):</strong> Flushes cached frames for the active source and re-scans the directory for newly rendered frames.</li>
+            <li><strong>Clear RAM Cache (<span class="key-badge">Ctrl+Shift+C</span>) &amp; Clear All Sources Cache (<span class="key-badge">Ctrl+Delete</span>):</strong> Instantly frees memory across active or all loaded bins.</li>
+          </ul>
+        </li>
+        <li><strong>Three GPU Playback Engines:</strong> Switch dynamically in <em>Preferences &rarr; GPU Acceleration</em> (or by clicking the GPU badge in the bottom status bar) between <strong>OpenGL 3.3 Core</strong>, <strong>Async PBO DMA Streaming</strong> (double-buffered zero-stall GPU transfers), and <strong>Software Safe Mode</strong>.</li>
+      </ul>
+
+      <!-- ================================================================== -->
+      <!-- 3. COLOR SCIENCE, LUT/CDL & OCIO v2 -->
+      <!-- ================================================================== -->
+      <h2 id="feat-color">3. Color Science, Dynamic GLSL Grading, LUT/CDL &amp; OCIO v2</h2>
+      <ul>
+        <li><strong>Scene-Linear Exposure (EV) &amp; Gain:</strong> Adjust linear gain (<span class="key-badge">+</span> / <span class="key-badge">-</span> in ±0.10 steps) or photographic F-stop Exposure (<span class="key-badge">Alt++</span> / <span class="key-badge">Alt+-</span> in ±0.25 EV steps). Reset instantly with <span class="key-badge">Ctrl+Alt+E</span> or <span class="key-badge">E</span>.</li>
+        <li><strong>Display Gamma &amp; Luma-Preserving Saturation:</strong> Step Gamma by ±0.05 with <span class="key-badge">Shift++</span> / <span class="key-badge">Shift+-</span> (reset with <span class="key-badge">Ctrl+Alt+G</span>) and Saturation by ±0.05 with <span class="key-badge">Ctrl+Shift++</span> / <span class="key-badge">Ctrl+Shift+-</span>.</li>
+        <li><strong>Invert Colors (<span class="key-badge">Shift+I</span>):</strong> Instantly inverts display-space RGB channels (<code>1.0 - RGB</code>) in the GLSL fragment shader—essential for judging subtle black-level grain, Flare/Matte holes, and high-contrast rotoscoping edges.</li>
+        <li><strong>Interactive Color Adjustments Panel (<span class="key-badge">/</span>):</strong> Provides master and per-channel (Red, Green, Blue) sliders for Exposure, Gain, Offset, Gamma, Contrast (around 18% grey pivot), Saturation, Hue rotation (<code>-180°</code> to <code>+180°</code>), and Display Brightness. Reset all color adjustments with <span class="key-badge">Ctrl+Alt+R</span> or <span class="key-badge">Shift+Home</span>.</li>
+        <li><strong>3D / 1D LUT &amp; ASC CDL Pipeline:</strong> Load industry-standard <code>.cube</code> and <code>.3dl</code> LUTs into hardware 3D texture memory, and load <code>.cdl</code>, <code>.cc</code>, or <code>.ccc</code> ASC CDL grades. Toggle LUT and CDL bypass independently from the <em>Color &rarr; LUT / CDL</em> menu.</li>
+        <li><strong>Out-of-Range (OOR) Zebra Clipping Overlay:</strong> Highlights super-white values (<code>&gt; 1.0</code>) in Magenta and negative values (<code>&lt; 0.0</code>) in Cyan.</li>
+        <li><strong>Single-Key Channel Isolation:</strong> Isolate <code>Full RGB</code> (<span class="key-badge">C</span>), <code>Red</code> (<span class="key-badge">R</span>), <code>Green</code> (<span class="key-badge">G</span>), <code>Blue</code> (<span class="key-badge">B</span>), <code>Alpha</code> (<span class="key-badge">A</span>), or Rec.709 <code>Luminance</code> (<span class="key-badge">Y</span>).</li>
+      </ul>
+
+      <!-- ================================================================== -->
+      <!-- 4. A/B WIPES, DIFFS, STACKS & LAYOUTS -->
+      <!-- ================================================================== -->
+      <h2 id="feat-comparison">4. A/B Split Wipes, Difference Modes, Multi-Layer Stacks &amp; Tiled Layouts</h2>
+      <figure class="doc-figure">
+        <img src="assets/screenshots/viewport_ab_wipe_mode.png" alt="Interactive A/B Split Wipe Comparison in Viewport">
+        <figcaption><strong>Figure 4.1:</strong> Interactive Angled A/B Split Wipe (<span class="key-badge">W</span>) comparing Primary Slot A (graded final comp) against Reference Slot B (ungraded plate) with the floating A/B Wipe Controller HUD.</figcaption>
+      </figure>
+      <ul>
+        <li><strong>Interactive Split Wipe (<span class="key-badge">W</span>):</strong> Drag the wipe line directly in the viewport to translate split position or drag near the handle to rotate the split angle through 360°. Press <span class="key-badge">Shift+W</span> to flip orientation between vertical and horizontal, or <span class="key-badge">Alt+W</span> to reset position to 50% and angle to 0°.</li>
+        <li><strong>Six Composite View Types:</strong> Available under <em>Review &rarr; View Type</em> and in the Stack HUD:
+          <ul>
+            <li><strong>Replace (Single):</strong> Standard single-source view.</li>
+            <li><strong>Sequence:</strong> Back-to-back editorial cut playback.</li>
+            <li><strong>Over (Alpha Composite):</strong> Premultiplied foreground Slot A over background Slot B (<code>A + B * (1 - alpha_A)</code>).</li>
+            <li><strong>Add:</strong> Additive blending (<code>A + B</code>) for light-pass reconstruction.</li>
+            <li><strong>Difference:</strong> Absolute pixel difference <code>|A - B| * DiffBoost</code> (matching pixels appear pure black).</li>
+            <li><strong>Difference (Inverted):</strong> Solarized white-background difference <code>1.0 - |A - B| * DiffBoost</code> so 1-pixel dust busts or grain changes pop clearly against white.</li>
+          </ul>
+        </li>
+        <li><strong>Stack Layer Cycling (<span class="key-badge">Z</span> / <span class="key-badge">Shift+Z</span>):</strong> Step forward and backward through stacked render layers or shot takes while locked on the exact same frame and zoom coordinates.</li>
+        <li><strong>Multi-Tile Contact Sheet Layouts:</strong> View 2 to 16+ sources simultaneously in <em>Auto Grid</em>, <em>Side-by-Side</em>, <em>Over/Under</em>, <em>2x2</em>, or <em>3x3</em> layouts with real-time synchronized playback and interactive tile reordering.</li>
+      </ul>
+
+      <!-- ================================================================== -->
+      <!-- 5. VIEWPORT GEOMETRY, MATTES & GUIDES -->
+      <!-- ================================================================== -->
+      <h2 id="feat-viewport">5. Viewport Geometry, Theatrical Mattes, Safe Guides &amp; Presentation Mode</h2>
+      <ul>
+        <li><strong>Flop, Flip, Rotation &amp; Pixel Aspect Ratio (PAR):</strong> Mirror horizontally (<span class="key-badge">Shift+X</span>) to check composition balance with fresh eyes, flip vertically (<span class="key-badge">Shift+Y</span>), rotate in 90° increments, and preview anamorphic squeeze factors (<code>2:1 Anamorphic</code>, <code>NTSC</code>, <code>PAL</code>, <code>Square 1.0</code>).</li>
+        <li><strong>Bilinear vs. Nearest-Neighbor Filtering (<span class="key-badge">N</span>):</strong> Switch between smooth bilinear interpolation and sharp nearest-neighbor pixel blocks when zoomed in to 400%/800% for sub-pixel edge and grain analysis.</li>
+        <li><strong>Theatrical Aspect Ratio Mattes (<span class="key-badge">Ctrl+M</span> / <span class="key-badge">Shift+M</span>):</strong> Cycle through <code>1.33:1</code>, <code>1.66:1</code>, <code>1.77:1</code>, <code>1.85:1</code>, <code>2.35:1</code>, and <code>2.40:1</code> crop overlays and cycle mask opacity (25%, 35%, 50%, 100%).</li>
+        <li><strong>Broadcast Safe Guides (<span class="key-badge">Shift+G</span>):</strong> Toggle 90% Action Safe, 80% Title Safe, Center Crosshair, and Rule of Thirds 3x3 Grid with optional constraint to the active theatrical matte.</li>
+        <li><strong>Borderless Fullscreen (<span class="key-badge">F12</span>) &amp; Presentation Mode (<span class="key-badge">Ctrl+P</span>):</strong> Fullscreen preserves Windows DWM popup compositing so floating HUDs and context menus never flicker over OpenGL. Presentation Mode hides all menus, toolbars, timelines, and docks for distraction-free director/client screening.</li>
+      </ul>
+
+      <!-- ================================================================== -->
+      <!-- 6. 32-BIT PIXEL PROBE & HISTOGRAM -->
+      <!-- ================================================================== -->
+      <h2 id="feat-inspector">6. 32-Bit Floating-Point Pixel Probe, Area Samplers &amp; Live Histogram</h2>
+      <ul>
+        <li><strong>Real-Time Cursor Readout:</strong> Bottom status bar and Color Inspector HUD (<span class="key-badge">F5</span>) report scene-linear 32-bit float RGBA, 8-bit integer RGB, HSV, Hex, and Rec.709 Luminance (Y) under the cursor.</li>
+        <li><strong>Pinned Point &amp; Area Box Samplers:</strong> Click in Eyedropper mode to pin persistent crosshairs or drag rectangular sample regions on the canvas. Computes live <strong>Minimum, Maximum, and Average (Mean)</strong> RGBA across the sampled region.</li>
+        <li><strong>Corrupted Pixel Alerts (NaN / Inf / Neg):</strong> Automatically counts and flags <code>NaN</code>, <code>Infinity</code>, and negative pixel values inside the active frame or sampled box.</li>
+      </ul>
+
+      <!-- ================================================================== -->
+      <!-- 7. VECTOR ANNOTATIONS & REVIEW NOTES -->
+      <!-- ================================================================== -->
+      <h2 id="feat-annotations">7. Resolution-Independent Vector Annotations &amp; Review Notes</h2>
+      <ul>
+        <li><strong>Six Vector Drawing Tools:</strong> Freehand Pen (<span class="key-badge">D</span>), Straight Line, Directional Arrow, Rectangle Box, Circle/Ellipse, and Direct In-Canvas Text Editor.</li>
+        <li><strong>Normalized Coordinate Storage:</strong> Strokes are stored in normalized <code>[0.0 .. 1.0]</code> image space so drawings remain locked to exact image features regardless of window resizing, zoom, pan, or proxy resolution changes.</li>
+        <li><strong>Per-Frame Undo/Redo &amp; Keyframe Stepping:</strong> Independent Undo (<span class="key-badge">Ctrl+Z</span>) and Redo (<span class="key-badge">Ctrl+Shift+Z</span> / <span class="key-badge">Ctrl+Y</span>) stacks per frame. Jump between annotated keyframes using <span class="key-badge">.</span> (Next) and <span class="key-badge">,</span> (Previous).</li>
+        <li><strong>Annotation Manager (<span class="key-badge">Ctrl+Shift+A</span>):</strong> Inspect all annotated frames, attach multi-line text notes per frame, and export/import review packages in <code>JSON</code>, <code>CSV</code>, or <code>Markdown</code>.</li>
+      </ul>
+
+      <!-- ================================================================== -->
+      <!-- 8–11. ADDITIONAL STUDIO CAPABILITIES -->
+      <!-- ================================================================== -->
+      <h2 id="feat-versioning">8. Pipeline Version Stepping &amp; Session Management</h2>
+      <ul>
+        <li><strong>Automatic Version Detection (<span class="key-badge">Alt+Up</span> / <span class="key-badge">Alt+Down</span>):</strong> Parses version tokens (<code>v001</code>, <code>v002</code>, <code>_v03</code>) in file and folder paths, scanning disk to step up or down to the next available render iteration while preserving playhead frame, zoom/pan, and In/Out marks.</li>
+        <li><strong>Complete Session Persistence (<code>.ovr</code>):</strong> Save (<span class="key-badge">Ctrl+S</span>), Save As (<span class="key-badge">Ctrl+Shift+S</span>), Open (<span class="key-badge">Ctrl+Shift+O</span>), New Session (<span class="key-badge">Ctrl+N</span>), and <strong>Close / Clear Session (<span class="key-badge">Ctrl+Shift+N</span>)</strong>.</li>
+      </ul>
+
+      <h2 id="feat-exr-stereo">9. Multi-Channel EXR AOV Passes &amp; Stereoscopic 3D</h2>
+      <ul>
+        <li><strong>EXR Layer Switcher:</strong> Inspect beauty, diffuse, specular, emission, Z-depth, and cryptomatte passes from multi-part OpenEXR files.</li>
+        <li><strong>Stereo 3D Review:</strong> Left Eye, Right Eye, Anaglyph (Red-Cyan), Side-by-Side Split, and Stereo Difference modes with interactive horizontal pixel convergence offset.</li>
+      </ul>
+
+      <h2 id="feat-audio-sync">10. Sub-Frame Audio Sync &amp; Multi-User Remote Dailies</h2>
+      <ul>
+        <li><strong>Audio Scrubbing &amp; Offset Calibration:</strong> 60ms scrubbing audio bursts on timeline/canvas drag, 45ms drift auto-resync, and independent Seconds + Frames offset controls.</li>
+        <li><strong>Remote Dailies Sync (<span class="key-badge">Ctrl+Shift+D</span>):</strong> Host or join TCP review rooms with Presenter lock, Follow toggle, live stroke/grade broadcasting, and integrated room chat.</li>
+      </ul>
+
+      <h2 id="feat-export-ext">11. Media Export, Python SDK &amp; Plugin Manager</h2>
+      <ul>
+        <li><strong>Burn-In Media Exporter (<span class="key-badge">Ctrl+Shift+E</span>):</strong> Export sequences, In/Out ranges, Bookmarked frames, or Annotated keyframes to <code>.mov</code>, <code>PNG</code> sequence, <code>JPEG</code> sequence, or single PNG with burned-in vector annotations and grading.</li>
+        <li><strong>JSON-RPC 2.0 IPC Server &amp; Plugin Architecture:</strong> Full remote control from Nuke, Maya, and Houdini on port <code>45124</code> and custom Python plugins via <code>PackageManager</code>.</li>
+      </ul>
+
+      <!-- ================================================================== -->
+      <!-- 12. AUTHORITATIVE KEYBOARD SHORTCUTS REGISTRY -->
+      <!-- ================================================================== -->
+      <h2 id="shortcuts-registry">12. Complete Keyboard Shortcuts Registry (All 78+ Actions &amp; Aliases)</h2>
+      <p>
+        Every shortcut below is managed by <code>ShortcutManager</code> (<code>core/shortcuts.py</code>) and can be customized in <strong>Preferences &rarr; Keyboard Shortcuts (<span class="key-badge">Ctrl+,</span>)</strong>. Use the live filter box below to search by action name, keybinding, or category:
+      </p>
+
+      <div class="search-bar-wrap">
+        <span style="color: var(--accent-gold); font-weight: 700;">🔍 Filter Shortcuts:</span>
+        <input type="text" id="shortcutSearchInput" class="search-input" placeholder="Type to filter by key (e.g. Shift+I, Ctrl+Shift+N, J, Wipe, Cache, Annotation)..." oninput="filterShortcuts()">
+      </div>
+
+      <!-- 12.1 Playback & Transport -->
+      <h3 id="sc-playback">12.1 Playback &amp; Transport Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>playback.toggle</code></td>
+            <td><strong>Toggle Play / Pause</strong></td>
+            <td><span class="key-badge">Space</span></td>
+            <td>Play or pause the active sequence or video clip.</td>
+          </tr>
+          <tr>
+            <td><code>playback.shuttle_rev</code></td>
+            <td><strong>Shuttle Reverse (J)</strong></td>
+            <td><span class="key-badge">J</span></td>
+            <td>Engage reverse playback; tap repeatedly to cycle <code>-1x</code>, <code>-2x</code>, <code>-4x</code>, <code>-8x</code> speeds.</td>
+          </tr>
+          <tr>
+            <td><code>playback.shuttle_stop</code></td>
+            <td><strong>Shuttle Stop (K)</strong></td>
+            <td><span class="key-badge">K</span></td>
+            <td>Halt playback immediately and reset shuttle multiplier to <code>1.0x</code>.</td>
+          </tr>
+          <tr>
+            <td><code>playback.shuttle_fwd</code></td>
+            <td><strong>Shuttle Forward (L)</strong></td>
+            <td><span class="key-badge">L</span> / <span class="key-badge">Shift+L</span></td>
+            <td>Engage forward playback; tap repeatedly to cycle <code>1x</code>, <code>2x</code>, <code>4x</code>, <code>8x</code> speeds.</td>
+          </tr>
+          <tr>
+            <td><code>playback.step_fwd</code></td>
+            <td><strong>Step Forward 1 Frame</strong></td>
+            <td><span class="key-badge">Right</span></td>
+            <td>Pause playback and advance playhead by 1 frame.</td>
+          </tr>
+          <tr>
+            <td><code>playback.step_back</code></td>
+            <td><strong>Step Backward 1 Frame</strong></td>
+            <td><span class="key-badge">Left</span></td>
+            <td>Pause playback and step playhead back by 1 frame.</td>
+          </tr>
+          <tr>
+            <td><code>playback.step_fwd_10</code></td>
+            <td><strong>Step Forward 10 Frames</strong></td>
+            <td><span class="key-badge">Shift+Right</span></td>
+            <td>Advance playhead by 10 frames.</td>
+          </tr>
+          <tr>
+            <td><code>playback.step_back_10</code></td>
+            <td><strong>Step Backward 10 Frames</strong></td>
+            <td><span class="key-badge">Shift+Left</span></td>
+            <td>Step playhead back by 10 frames.</td>
+          </tr>
+          <tr>
+            <td><code>playback.first_frame</code></td>
+            <td><strong>Go to First Frame</strong></td>
+            <td><span class="key-badge">Home</span></td>
+            <td>Jump to sequence start frame (or Marked In frame if clamped).</td>
+          </tr>
+          <tr>
+            <td><code>playback.last_frame</code></td>
+            <td><strong>Go to Last Frame</strong></td>
+            <td><span class="key-badge">End</span></td>
+            <td>Jump to sequence end frame (or Marked Out frame if clamped).</td>
+          </tr>
+          <tr>
+            <td><code>playback.play_fwd</code></td>
+            <td><strong>Play Forward (Explicit)</strong></td>
+            <td><em>Unbound (Menu / Rebindable)</em></td>
+            <td>Start normal 1x forward playback.</td>
+          </tr>
+          <tr>
+            <td><code>playback.play_back</code></td>
+            <td><strong>Play Backward (Explicit)</strong></td>
+            <td><em>Unbound (Menu / Rebindable)</em></td>
+            <td>Start normal 1x reverse playback.</td>
+          </tr>
+          <tr>
+            <td><code>app.toggle_cache</code></td>
+            <td><strong>Start In/Out Region Cache</strong></td>
+            <td><span class="key-badge">Shift+C</span></td>
+            <td>Activate In/Out Region RAM caching mode and begin prefetching.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.2 Channels -->
+      <h3 id="sc-channels">12.2 Channel Isolation Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>channel.rgb</code></td>
+            <td><strong>Channel: Full RGB Color</strong></td>
+            <td><span class="key-badge">C</span></td>
+            <td>Display full color RGB composite buffer.</td>
+          </tr>
+          <tr>
+            <td><code>channel.red</code></td>
+            <td><strong>Channel: Red (Isolated)</strong></td>
+            <td><span class="key-badge">R</span></td>
+            <td>Isolate Red channel as monochrome greyscale (press again to restore RGB).</td>
+          </tr>
+          <tr>
+            <td><code>channel.green</code></td>
+            <td><strong>Channel: Green (Isolated)</strong></td>
+            <td><span class="key-badge">G</span></td>
+            <td>Isolate Green channel as monochrome greyscale (press again to restore RGB).</td>
+          </tr>
+          <tr>
+            <td><code>channel.blue</code></td>
+            <td><strong>Channel: Blue (Isolated)</strong></td>
+            <td><span class="key-badge">B</span></td>
+            <td>Isolate Blue channel as monochrome greyscale (press again to restore RGB).</td>
+          </tr>
+          <tr>
+            <td><code>channel.alpha</code></td>
+            <td><strong>Channel: Alpha (Isolated)</strong></td>
+            <td><span class="key-badge">A</span></td>
+            <td>Isolate Alpha matte channel (press again to restore RGB).</td>
+          </tr>
+          <tr>
+            <td><code>channel.luma</code></td>
+            <td><strong>Channel: Luminance (Isolated)</strong></td>
+            <td><span class="key-badge">Y</span></td>
+            <td>Isolate Rec.709 perceptual luminance buffer (<code>0.2126R + 0.7152G + 0.0722B</code>).</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.3 View & Display -->
+      <h3 id="sc-view">12.3 View, Zoom, Geometry &amp; Display Overlay Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>view.fit</code></td>
+            <td><strong>Fit Image to Window</strong></td>
+            <td><span class="key-badge">F</span></td>
+            <td>Fit active image resolution cleanly inside viewport bounds and center pan.</td>
+          </tr>
+          <tr>
+            <td><code>view.actual_size</code></td>
+            <td><strong>Actual Size (100% 1:1)</strong></td>
+            <td><span class="key-badge">1</span></td>
+            <td>Zoom image to exact 1:1 native pixel scale.</td>
+          </tr>
+          <tr>
+            <td><code>view.fit_width</code></td>
+            <td><strong>Fit Width</strong></td>
+            <td><span class="key-badge">Alt+F</span></td>
+            <td>Scale image horizontally to match viewport width.</td>
+          </tr>
+          <tr>
+            <td><code>view.zoom_100</code></td>
+            <td><strong>Zoom 100% Preset</strong></td>
+            <td><span class="key-badge">Ctrl+1</span></td>
+            <td>Set 100% (1:1) pixel zoom preset.</td>
+          </tr>
+          <tr>
+            <td><code>view.zoom_200</code></td>
+            <td><strong>Zoom 200% Preset</strong></td>
+            <td><span class="key-badge">Ctrl+2</span></td>
+            <td>Set 200% (2:1) pixel zoom preset.</td>
+          </tr>
+          <tr>
+            <td><code>view.zoom_400</code></td>
+            <td><strong>Zoom 400% Preset</strong></td>
+            <td><span class="key-badge">Ctrl+4</span></td>
+            <td>Set 400% (4:1) pixel zoom preset.</td>
+          </tr>
+          <tr>
+            <td><code>view.zoom_800</code></td>
+            <td><strong>Zoom 800% Preset</strong></td>
+            <td><span class="key-badge">Ctrl+8</span></td>
+            <td>Set 800% (8:1) pixel zoom preset for deep pixel/grain inspection.</td>
+          </tr>
+          <tr>
+            <td><code>view.flop_x</code></td>
+            <td><strong>Flop (Horizontal Mirror)</strong></td>
+            <td><span class="key-badge">Shift+X</span></td>
+            <td>Mirror image horizontally across the X axis.</td>
+          </tr>
+          <tr>
+            <td><code>view.flip_y</code></td>
+            <td><strong>Flip (Vertical Invert)</strong></td>
+            <td><span class="key-badge">Shift+Y</span></td>
+            <td>Flip image vertically across the Y axis.</td>
+          </tr>
+          <tr>
+            <td><code>view.filter_toggle</code></td>
+            <td><strong>Toggle Texture Filtering</strong></td>
+            <td><span class="key-badge">N</span></td>
+            <td>Toggle between Smooth Bilinear filtering and Nearest-Neighbor hard pixel edges.</td>
+          </tr>
+          <tr>
+            <td><code>view.fullscreen</code></td>
+            <td><strong>Toggle Fullscreen</strong></td>
+            <td><span class="key-badge">F12</span></td>
+            <td>Toggle borderless fullscreen display across active monitor.</td>
+          </tr>
+          <tr>
+            <td><code>view.presentation</code></td>
+            <td><strong>Toggle Presentation Mode</strong></td>
+            <td><span class="key-badge">Ctrl+P</span></td>
+            <td>Hide all menus, toolbars, timelines, and docks for clean client screening.</td>
+          </tr>
+          <tr>
+            <td><code>view.matte_cycle</code></td>
+            <td><strong>Cycle Matte Aspect Ratio</strong></td>
+            <td><span class="key-badge">Ctrl+M</span></td>
+            <td>Cycle theatrical aspect ratio mattes (None, 1.33, 1.66, 1.77, 1.85, 2.35, 2.40).</td>
+          </tr>
+          <tr>
+            <td><code>view.matte_opacity_cycle</code></td>
+            <td><strong>Cycle Matte Opacity</strong></td>
+            <td><span class="key-badge">Shift+M</span></td>
+            <td>Cycle aspect ratio mask opacity (25%, 35%, 50%, 100%).</td>
+          </tr>
+          <tr>
+            <td><code>view.safe_guides</code></td>
+            <td><strong>Toggle Safe Area Guides</strong></td>
+            <td><span class="key-badge">Shift+G</span></td>
+            <td>Show/hide 90% Action Safe, 80% Title Safe, and Center Crosshair overlays.</td>
+          </tr>
+          <tr>
+            <td><code>view.onion_skin</code></td>
+            <td><strong>Toggle Onion Skinning</strong></td>
+            <td><span class="key-badge">Shift+O</span></td>
+            <td>Show/hide ghosted previous/next frame onion skin overlay.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.4 Color & Exposure -->
+      <h3 id="sc-color">12.4 Color Grading, Exposure &amp; Invert Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>color.invert_toggle</code></td>
+            <td><strong>Toggle Invert Colors</strong></td>
+            <td><span class="key-badge">Shift+I</span></td>
+            <td>Toggle RGB color inversion (<code>1.0 - RGB</code>) in display space and show viewport toast.</td>
+          </tr>
+          <tr>
+            <td><code>color.gain_up</code></td>
+            <td><strong>Gain: Increase (+0.10)</strong></td>
+            <td><span class="key-badge">+</span> / <span class="key-badge">=</span> / <span class="key-badge">Num++</span></td>
+            <td>Increase linear exposure gain multiplier by <code>+0.10</code>.</td>
+          </tr>
+          <tr>
+            <td><code>color.gain_down</code></td>
+            <td><strong>Gain: Decrease (-0.10)</strong></td>
+            <td><span class="key-badge">-</span> / <span class="key-badge">_</span> / <span class="key-badge">Num+-</span></td>
+            <td>Decrease linear exposure gain multiplier by <code>-0.10</code>.</td>
+          </tr>
+          <tr>
+            <td><code>color.exp_up</code></td>
+            <td><strong>Exposure: Increase (+0.25 EV)</strong></td>
+            <td><span class="key-badge">Alt++</span> / <span class="key-badge">Alt+=</span> / <span class="key-badge">Alt+Num++</span></td>
+            <td>Increase exposure compensation by <code>+0.25 EV</code> stops.</td>
+          </tr>
+          <tr>
+            <td><code>color.exp_down</code></td>
+            <td><strong>Exposure: Decrease (-0.25 EV)</strong></td>
+            <td><span class="key-badge">Alt+-</span> / <span class="key-badge">Alt+_</span> / <span class="key-badge">Alt+Num+-</span></td>
+            <td>Decrease exposure compensation by <code>-0.25 EV</code> stops.</td>
+          </tr>
+          <tr>
+            <td><code>color.gamma_up</code></td>
+            <td><strong>Gamma: Increase (+0.05)</strong></td>
+            <td><span class="key-badge">Shift++</span> / <span class="key-badge">Shift+=</span> / <span class="key-badge">Shift+Num++</span></td>
+            <td>Increase display gamma power curve by <code>+0.05</code>.</td>
+          </tr>
+          <tr>
+            <td><code>color.gamma_down</code></td>
+            <td><strong>Gamma: Decrease (-0.05)</strong></td>
+            <td><span class="key-badge">Shift+-</span> / <span class="key-badge">Shift+_</span> / <span class="key-badge">Shift+Num+-</span></td>
+            <td>Decrease display gamma power curve by <code>-0.05</code>.</td>
+          </tr>
+          <tr>
+            <td><code>color.sat_up</code></td>
+            <td><strong>Saturation: Increase (+0.05)</strong></td>
+            <td><span class="key-badge">Ctrl+Shift++</span> / <span class="key-badge">Ctrl+Shift+=</span></td>
+            <td>Increase luma-preserving color saturation by <code>+0.05</code>.</td>
+          </tr>
+          <tr>
+            <td><code>color.sat_down</code></td>
+            <td><strong>Saturation: Decrease (-0.05)</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+-</span> / <span class="key-badge">Ctrl+Shift+_</span></td>
+            <td>Decrease luma-preserving color saturation by <code>-0.05</code>.</td>
+          </tr>
+          <tr>
+            <td><code>color.exp_reset</code></td>
+            <td><strong>Reset Exposure (0 EV / 1.0x)</strong></td>
+            <td><span class="key-badge">Ctrl+Alt+E</span> / <span class="key-badge">Ctrl+E</span> / <span class="key-badge">E</span></td>
+            <td>Reset exposure compensation to <code>0.0 EV</code> and linear gain to <code>1.0</code>.</td>
+          </tr>
+          <tr>
+            <td><code>color.gamma_reset</code></td>
+            <td><strong>Reset Gamma (1.0)</strong></td>
+            <td><span class="key-badge">Ctrl+Alt+G</span></td>
+            <td>Reset display gamma to <code>1.00</code>.</td>
+          </tr>
+          <tr>
+            <td><code>color.reset_all</code></td>
+            <td><strong>Reset All Color Adjustments</strong></td>
+            <td><span class="key-badge">Ctrl+Alt+R</span> / <span class="key-badge">Shift+Home</span></td>
+            <td>Reset Gain, Exposure, Gamma, Saturation, Offset, Contrast, Hue, Invert, and OOR to defaults.</td>
+          </tr>
+          <tr>
+            <td><code>color.adjustments</code></td>
+            <td><strong>Interactive Color Adjustments</strong></td>
+            <td><span class="key-badge">/</span></td>
+            <td>Toggle the Interactive Color Adjustments floating HUD card.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.5 Timeline -->
+      <h3 id="sc-timeline">12.5 Timeline &amp; Timecode Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>timeline.zoom_in</code></td>
+            <td><strong>Timeline Zoom In</strong></td>
+            <td><span class="key-badge">Ctrl+=</span></td>
+            <td>Zoom in the timeline frame ruler around the playhead.</td>
+          </tr>
+          <tr>
+            <td><code>timeline.zoom_out</code></td>
+            <td><strong>Timeline Zoom Out</strong></td>
+            <td><span class="key-badge">Ctrl+-</span></td>
+            <td>Zoom out the timeline frame ruler.</td>
+          </tr>
+          <tr>
+            <td><code>timeline.magnifier_toggle</code></td>
+            <td><strong>Toggle Magnified Timeline</strong></td>
+            <td><span class="key-badge">Shift+T</span></td>
+            <td>Toggle the magnified timeline scrub mini-ruler bar.</td>
+          </tr>
+          <tr>
+            <td><code>timeline.toggle_timecode</code></td>
+            <td><strong>Toggle SMPTE Timecode</strong></td>
+            <td><span class="key-badge">Ctrl+T</span></td>
+            <td>Switch timeline and readout between Frame Numbers and SMPTE Timecode (<code>HH:MM:SS:FF</code>).</td>
+          </tr>
+          <tr>
+            <td><code>timeline.goto_frame</code></td>
+            <td><strong>Go to Frame Modal</strong></td>
+            <td><span class="key-badge">Ctrl+G</span></td>
+            <td>Open the numeric Go to Frame HUD modal dialog.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.6 Marking & Bookmarks -->
+      <h3 id="sc-marking">12.6 Marking, In/Out Ranges &amp; Bookmarks Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>mark.in</code></td>
+            <td><strong>Set In Mark</strong></td>
+            <td><span class="key-badge">[</span></td>
+            <td>Set playback loop In boundary at current frame.</td>
+          </tr>
+          <tr>
+            <td><code>mark.out</code></td>
+            <td><strong>Set Out Mark</strong></td>
+            <td><span class="key-badge">]</span></td>
+            <td>Set playback loop Out boundary at current frame.</td>
+          </tr>
+          <tr>
+            <td><code>mark.clear_in_out</code></td>
+            <td><strong>Clear In/Out Range</strong></td>
+            <td><span class="key-badge">\</span></td>
+            <td>Clear both In and Out marks and restore full sequence duration.</td>
+          </tr>
+          <tr>
+            <td><code>mark.clear_in</code></td>
+            <td><strong>Clear In Mark</strong></td>
+            <td><span class="key-badge">Alt+I</span></td>
+            <td>Reset marked In point to sequence start frame.</td>
+          </tr>
+          <tr>
+            <td><code>mark.clear_out</code></td>
+            <td><strong>Clear Out Mark</strong></td>
+            <td><span class="key-badge">Alt+O</span></td>
+            <td>Reset marked Out point to sequence end frame.</td>
+          </tr>
+          <tr>
+            <td><code>mark.bookmark_toggle</code></td>
+            <td><strong>Toggle Bookmark</strong></td>
+            <td><span class="key-badge">M</span></td>
+            <td>Add or remove a timeline frame bookmark at the current playhead position.</td>
+          </tr>
+          <tr>
+            <td><code>mark.bookmark_next</code></td>
+            <td><strong>Next Marker / Bookmark</strong></td>
+            <td><span class="key-badge">Alt+Right</span></td>
+            <td>Jump playhead to the next bookmarked frame on the timeline.</td>
+          </tr>
+          <tr>
+            <td><code>mark.bookmark_prev</code></td>
+            <td><strong>Previous Marker / Bookmark</strong></td>
+            <td><span class="key-badge">Alt+Left</span></td>
+            <td>Jump playhead to the previous bookmarked frame on the timeline.</td>
+          </tr>
+          <tr>
+            <td><code>mark.bookmark_segment_next</code></td>
+            <td><strong>Next Bookmark Segment</strong></td>
+            <td><span class="key-badge">PageDown</span></td>
+            <td>Step In/Out playback bounds forward to the next bookmark interval or sequence clip.</td>
+          </tr>
+          <tr>
+            <td><code>mark.bookmark_segment_prev</code></td>
+            <td><strong>Previous Bookmark Segment</strong></td>
+            <td><span class="key-badge">PageUp</span></td>
+            <td>Step In/Out playback bounds backward to the previous bookmark interval or sequence clip.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.7 Stacking, Playlist & Versioning -->
+      <h3 id="sc-stack">12.7 Media Stacking, Playlist &amp; Pipeline Versioning Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>stack.cycle_fwd</code></td>
+            <td><strong>Cycle Stack Layer Forward</strong></td>
+            <td><span class="key-badge">Z</span></td>
+            <td>Cycle to the next layer/input in the active Stack view.</td>
+          </tr>
+          <tr>
+            <td><code>stack.cycle_bwd</code></td>
+            <td><strong>Cycle Stack Layer Backward</strong></td>
+            <td><span class="key-badge">Shift+Z</span></td>
+            <td>Cycle to the previous layer/input in the active Stack view.</td>
+          </tr>
+          <tr>
+            <td><code>playlist.toggle</code></td>
+            <td><strong>Toggle Sources &amp; Session Manager</strong></td>
+            <td><span class="key-badge">`</span> (Backtick)</td>
+            <td>Show or hide the left Sources &amp; Session Manager dock panel.</td>
+          </tr>
+          <tr>
+            <td><code>version.up</code></td>
+            <td><strong>Version Up (Next Iteration)</strong></td>
+            <td><span class="key-badge">Alt+Up</span></td>
+            <td>Advance active source to the next pipeline version on disk (e.g. <code>v001 &rarr; v002</code>).</td>
+          </tr>
+          <tr>
+            <td><code>version.down</code></td>
+            <td><strong>Version Down (Previous Iteration)</strong></td>
+            <td><span class="key-badge">Alt+Down</span></td>
+            <td>Revert active source to the previous pipeline version on disk (e.g. <code>v002 &rarr; v001</code>).</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.8 HUDs & Floating Panels -->
+      <h3 id="sc-huds">12.8 HUDs, Wipes &amp; Floating Panels Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>hud.histogram</code></td>
+            <td><strong>Toggle Live RGB Histogram</strong></td>
+            <td><span class="key-badge">H</span></td>
+            <td>Show or hide the real-time RGB &amp; Luminance Histogram HUD card.</td>
+          </tr>
+          <tr>
+            <td><code>hud.color_inspector</code></td>
+            <td><strong>Toggle Color Inspector HUD</strong></td>
+            <td><span class="key-badge">F5</span> / <span class="key-badge">Alt+C</span></td>
+            <td>Show or hide the 32-bit float Pixel Color Inspector &amp; Area Analyzer HUD.</td>
+          </tr>
+          <tr>
+            <td><code>hud.wipe</code></td>
+            <td><strong>Toggle A/B Wipe Controller</strong></td>
+            <td><span class="key-badge">W</span></td>
+            <td>Enable/disable interactive A/B split wipe comparison and show Wipe HUD.</td>
+          </tr>
+          <tr>
+            <td><code>hud.wipe_flip_orientation</code></td>
+            <td><strong>Flip Wipe Orientation</strong></td>
+            <td><span class="key-badge">Shift+W</span></td>
+            <td>Flip the A/B split wipe line between Vertical and Horizontal orientation.</td>
+          </tr>
+          <tr>
+            <td><code>hud.wipe_reset</code></td>
+            <td><strong>Reset Wipe Controls</strong></td>
+            <td><span class="key-badge">Alt+W</span></td>
+            <td>Reset split wipe position to 50% center and rotation angle to 0°.</td>
+          </tr>
+          <tr>
+            <td><code>hud.source_details</code></td>
+            <td><strong>Toggle Source Media Details</strong></td>
+            <td><span class="key-badge">I</span></td>
+            <td>Show or hide the Source Media Details &amp; EXR Metadata Inspector HUD.</td>
+          </tr>
+          <tr>
+            <td><code>hud.info_strip</code></td>
+            <td><strong>Toggle Info Strip Overlay</strong></td>
+            <td><span class="key-badge">Ctrl+I</span></td>
+            <td>Show or hide the top-left viewport metadata burn-in info strip.</td>
+          </tr>
+          <tr>
+            <td><code>hud.dailies_sync</code></td>
+            <td><strong>Remote Dailies Sync Panel</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+D</span></td>
+            <td>Show or hide the Multi-User Remote Dailies Sync collaboration HUD.</td>
+          </tr>
+          <tr>
+            <td><code>hud.toggle_file_browser</code></td>
+            <td><strong>Toggle Inbuilt File Browser</strong></td>
+            <td><span class="key-badge">Ctrl+B</span></td>
+            <td>Show or hide the dockable File &amp; Sequence Browser panel.</td>
+          </tr>
+          <tr>
+            <td><code>hud.console</code></td>
+            <td><strong>Toggle Diagnostic Console</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+L</span></td>
+            <td>Show or hide the Diagnostic Console &amp; Error Log window.</td>
+          </tr>
+          <tr>
+            <td><code>hud.layers</code></td>
+            <td><strong>Toggle EXR Passes HUD</strong></td>
+            <td><em>Rebindable in Preferences</em></td>
+            <td>Show or hide the Multi-Channel EXR Render Passes inspector HUD.</td>
+          </tr>
+          <tr>
+            <td><code>hud.stereo</code></td>
+            <td><strong>Toggle Stereoscopic 3D HUD</strong></td>
+            <td><em>Rebindable in Preferences</em></td>
+            <td>Show or hide the Stereoscopic 3D display &amp; convergence HUD.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.9 Annotations -->
+      <h3 id="sc-annot">12.9 Vector Annotations &amp; Review Notes Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>annot.toggle_palette</code></td>
+            <td><strong>Toggle Annotation Toolbox</strong></td>
+            <td><span class="key-badge">X</span></td>
+            <td>Show or hide the top floating Annotation Capsule Palette.</td>
+          </tr>
+          <tr>
+            <td><code>annot.toggle_pen</code></td>
+            <td><strong>Toggle Pen Drawing Tool</strong></td>
+            <td><span class="key-badge">D</span></td>
+            <td>Activate or deactivate the freehand vector pen tool on the canvas.</td>
+          </tr>
+          <tr>
+            <td><code>annot.undo</code></td>
+            <td><strong>Undo Annotation</strong></td>
+            <td><span class="key-badge">Ctrl+Z</span></td>
+            <td>Undo the last drawing stroke on the current frame.</td>
+          </tr>
+          <tr>
+            <td><code>annot.redo</code></td>
+            <td><strong>Redo Annotation</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+Z</span> / <span class="key-badge">Ctrl+Y</span></td>
+            <td>Redo the last undone drawing stroke on the current frame.</td>
+          </tr>
+          <tr>
+            <td><code>annot.clear_frame</code></td>
+            <td><strong>Clear Frame Annotations</strong></td>
+            <td><span class="key-badge">Delete</span> / <span class="key-badge">Backspace</span></td>
+            <td>Erase all vector drawings on the current frame (undoable).</td>
+          </tr>
+          <tr>
+            <td><code>annot.next_keyframe</code></td>
+            <td><strong>Next Annotated Frame</strong></td>
+            <td><span class="key-badge">.</span> (Period)</td>
+            <td>Jump playhead forward to the next frame containing vector strokes or notes.</td>
+          </tr>
+          <tr>
+            <td><code>annot.prev_keyframe</code></td>
+            <td><strong>Previous Annotated Frame</strong></td>
+            <td><span class="key-badge">,</span> (Comma)</td>
+            <td>Jump playhead backward to the previous frame containing vector strokes or notes.</td>
+          </tr>
+          <tr>
+            <td><code>annot.manager</code></td>
+            <td><strong>Open Annotation Manager</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+A</span></td>
+            <td>Toggle the Annotation &amp; Review Notes Manager HUD for note editing and CSV/JSON/MD export.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.10 Sessions, Cache & Application -->
+      <h3 id="sc-sessions">12.10 File, Sessions, Cache &amp; Application Shortcuts</h3>
+      <table class="shortcut-table">
+        <thead>
+          <tr>
+            <th style="width: 22%;">Action ID</th>
+            <th style="width: 26%;">Action Name</th>
+            <th style="width: 22%;">Default Shortcut &amp; Aliases</th>
+            <th>Detailed Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>session.new</code></td>
+            <td><strong>New Session</strong></td>
+            <td><span class="key-badge">Ctrl+N</span></td>
+            <td>Prompt to start a clean session and reset timeline/grading state.</td>
+          </tr>
+          <tr>
+            <td><code>session.close</code></td>
+            <td><strong>Close / Clear Session</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+N</span></td>
+            <td>Prompt to close active session, unload all readers, flush RAM cache, and clear canvas &amp; bins.</td>
+          </tr>
+          <tr>
+            <td><code>session.open_media</code></td>
+            <td><strong>Open Media File / Sequence...</strong></td>
+            <td><span class="key-badge">Ctrl+O</span></td>
+            <td>Open file dialog to load a video, image sequence, still, or audio track.</td>
+          </tr>
+          <tr>
+            <td><code>session.open</code></td>
+            <td><strong>Open Session (<code>.ovr</code>)...</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+O</span></td>
+            <td>Load a saved OpenReview <code>.ovr</code> JSON session file.</td>
+          </tr>
+          <tr>
+            <td><code>session.save</code></td>
+            <td><strong>Save Session</strong></td>
+            <td><span class="key-badge">Ctrl+S</span></td>
+            <td>Save current session graph, grades, bookmarks, and annotations to active <code>.ovr</code> file.</td>
+          </tr>
+          <tr>
+            <td><code>session.save_as</code></td>
+            <td><strong>Save Session As...</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+S</span></td>
+            <td>Save current session under a new <code>.ovr</code> file path.</td>
+          </tr>
+          <tr>
+            <td><code>session.export</code></td>
+            <td><strong>Export Media...</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+E</span></td>
+            <td>Open Export Media dialog (<code>.mov</code>, <code>PNG</code>/<code>JPG</code> sequence, single frame, burn-in).</td>
+          </tr>
+          <tr>
+            <td><code>media.reload_frame</code></td>
+            <td><strong>Reload Current Frame</strong></td>
+            <td><span class="key-badge">Ctrl+R</span></td>
+            <td>Evict current frame from RAM cache and reload fresh pixels from disk.</td>
+          </tr>
+          <tr>
+            <td><code>media.reload_sequence</code></td>
+            <td><strong>Reload Sequence / Flush Cache</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+R</span></td>
+            <td>Flush all cached frames for the active sequence and reload from disk.</td>
+          </tr>
+          <tr>
+            <td><code>app.clear_cache</code></td>
+            <td><strong>Clear RAM Cache</strong></td>
+            <td><span class="key-badge">Ctrl+Shift+C</span></td>
+            <td>Flush all cached image frames from memory for the active reader.</td>
+          </tr>
+          <tr>
+            <td><code>app.clear_all_cache</code></td>
+            <td><strong>Clear All Source Cache</strong></td>
+            <td><span class="key-badge">Ctrl+Delete</span> / <span class="key-badge">Ctrl+Del</span></td>
+            <td>Flush all cached frames across every source in the session from RAM.</td>
+          </tr>
+          <tr>
+            <td><code>app.preferences</code></td>
+            <td><strong>Preferences...</strong></td>
+            <td><span class="key-badge">Ctrl+,</span></td>
+            <td>Open the Preferences dialog (General, Caching, GPU Acceleration, Keyboard Shortcuts).</td>
+          </tr>
+          <tr>
+            <td><code>app.escape</code></td>
+            <td><strong>Cancel / Deselect Active Tool</strong></td>
+            <td><span class="key-badge">Escape</span> / <span class="key-badge">Esc</span></td>
+            <td>Deselect active drawing tool, commit/cancel text editor, or exit Presentation Mode.</td>
+          </tr>
+          <tr>
+            <td><code>app.quit</code></td>
+            <td><strong>Quit OpenReview</strong></td>
+            <td><span class="key-badge">Ctrl+Q</span></td>
+            <td>Gracefully shut down servers, plugins, and exit OpenReview.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.11 Mouse & Modifier Bindings -->
+      <h3 id="sc-mouse">12.11 Viewport &amp; Timeline Mouse / Modifier Interactions</h3>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 32%;">Mouse / Modifier Action</th>
+            <th style="width: 24%;">Context</th>
+            <th>Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="key-badge">Middle-Click Drag</span></td>
+            <td>Viewport Canvas</td>
+            <td>Pan image freely across the viewport in any tool mode.</td>
+          </tr>
+          <tr>
+            <td><span class="key-badge">Mouse Wheel Up / Down</span></td>
+            <td>Viewport Canvas</td>
+            <td>Smoothly zoom in/out anchored at the current cursor position.</td>
+          </tr>
+          <tr>
+            <td><span class="key-badge">Left-Click Drag</span> (Scrub Mode ON)</td>
+            <td>Viewport Canvas</td>
+            <td>Scrub horizontally forward and backward across sequence frames with audio scrubbing.</td>
+          </tr>
+          <tr>
+            <td><span class="key-badge">Left-Click Drag</span> (Drawing Tool Active)</td>
+            <td>Viewport Canvas</td>
+            <td>Draw freehand pen stroke, line, arrow, rectangle, or circle annotation.</td>
+          </tr>
+          <tr>
+            <td><span class="key-badge">Left-Click Drag</span> (Eyedropper Active)</td>
+            <td>Viewport Canvas</td>
+            <td>Click to pin a persistent point color sampler, or drag to create a rectangular area analyzer box.</td>
+          </tr>
+          <tr>
+            <td><span class="key-badge">Left-Click Drag on Wipe Line</span></td>
+            <td>Viewport Canvas (Wipe ON)</td>
+            <td>Translate A/B split wipe position or rotate the split wipe angle.</td>
+          </tr>
+          <tr>
+            <td><span class="key-badge">Right-Click</span></td>
+            <td>Viewport / Sources / Timeline</td>
+            <td>Open context-sensitive studio menu (works seamlessly in borderless fullscreen).</td>
+          </tr>
+          <tr>
+            <td><span class="key-badge">Ctrl + Left-Click</span> or <span class="key-badge">Double-Click</span></td>
+            <td>Top Bar Sliders (Gain/Gamma/Sat)</td>
+            <td>Snap slider immediately back to neutral default value (<code>1.0</code>).</td>
+          </tr>
+        </tbody>
+      </table>
+
+    </main>
+  </div>
+
+  <footer class="docs-footer">
+    <strong>OpenReview v0.1.0</strong> &bull; Authored by <strong>Maruthu Chakravarthi</strong> &bull; Professional VFX Review &amp; Playback Workstation Documentation
+  </footer>
+
+  <script>
+    function filterShortcuts() {
+      const q = document.getElementById('shortcutSearchInput').value.toLowerCase();
+      const tables = document.querySelectorAll('.shortcut-table');
+      tables.forEach(tbl => {
+        const rows = tbl.querySelectorAll('tbody tr');
+        rows.forEach(row => {
+          const text = row.innerText.toLowerCase();
+          row.style.display = text.includes(q) ? '' : 'none';
+        });
+      });
+    }
+  </script>
+
+</body>
+</html>

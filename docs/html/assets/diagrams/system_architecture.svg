@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 680" width="100%" height="auto" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, sans-serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141414"/>
+      <stop offset="100%" stop-color="#1c1c1c"/>
+    </linearGradient>
+    <linearGradient id="amberGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#e5a823"/>
+      <stop offset="100%" stop-color="#f3c65f"/>
+    </linearGradient>
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#262626"/>
+      <stop offset="100%" stop-color="#1e1e1e"/>
+    </linearGradient>
+    <linearGradient id="gpuGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2c2210"/>
+      <stop offset="100%" stop-color="#1f180b"/>
+    </linearGradient>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#e5a823"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#4dabf7"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#69db7c"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1120" height="680" rx="10" fill="url(#bgGrad)" stroke="#333333" stroke-width="1.5"/>
+
+  <!-- Header Banner -->
+  <rect x="20" y="18" width="1080" height="44" rx="6" fill="#222222" stroke="#383838"/>
+  <circle cx="42" cy="40" r="7" fill="#e5a823"/>
+  <text x="58" y="45" fill="#f0f0f0" font-size="16" font-weight="700" letter-spacing="0.5">OPENREVIEW SYSTEM ARCHITECTURE — MULTI-LAYERED ENGINE TOPOLOGY</text>
+  <text x="1080" y="45" fill="#999999" font-size="12" text-anchor="end">PySide6 + OpenGL 3.3 Core + OCIO v2</text>
+
+  <!-- LAYER 1: EXTERNAL ECOSYSTEM & NETWORK LAYER -->
+  <rect x="20" y="76" width="1080" height="106" rx="8" fill="#1a1d24" stroke="#2e3846" stroke-dasharray="5,3"/>
+  <text x="36" y="96" fill="#4dabf7" font-size="11" font-weight="700" letter-spacing="1">LAYER 1 • EXTERNAL PIPELINE, IPC AUTOMATION &amp; COLLABORATION NETWORK</text>
+
+  <!-- Box 1A: Python SDK & DCC -->
+  <rect x="36" y="106" width="320" height="64" rx="6" fill="url(#cardGrad)" stroke="#4dabf7" stroke-width="1.2"/>
+  <text x="50" y="126" fill="#ffffff" font-size="13" font-weight="700">Python SDK &amp; DCC Integrations</text>
+  <text x="50" y="144" fill="#aaaaaa" font-size="11">Foundry Nuke • Autodesk Maya • SideFX Houdini</text>
+  <text x="50" y="160" fill="#4dabf7" font-size="10" font-family="monospace">OpenReviewClient (JSON-RPC 2.0 • TCP :45124)</text>
+
+  <!-- Box 1B: Dailies Sync Engine -->
+  <rect x="380" y="106" width="350" height="64" rx="6" fill="url(#cardGrad)" stroke="#4dabf7" stroke-width="1.2"/>
+  <text x="394" y="126" fill="#ffffff" font-size="13" font-weight="700">Multi-User Remote Dailies Sync Engine</text>
+  <text x="394" y="144" fill="#aaaaaa" font-size="11">Host Server / Peer Client Rooms • Presenter Lock</text>
+  <text x="394" y="160" fill="#4dabf7" font-size="10" font-family="monospace">DailiesSyncEngine (TCP :9090 • Stroke/Grade/Chat)</text>
+
+  <!-- Box 1C: Extension Package System -->
+  <rect x="754" y="106" width="330" height="64" rx="6" fill="url(#cardGrad)" stroke="#69db7c" stroke-width="1.2"/>
+  <text x="768" y="126" fill="#ffffff" font-size="13" font-weight="700">Package &amp; Plugin Extension System</text>
+  <text x="768" y="144" fill="#aaaaaa" font-size="11">Built-in &amp; User Plugins (~/.openreview/packages)</text>
+  <text x="768" y="160" fill="#69db7c" font-size="10" font-family="monospace">PackageManager • OpenReviewPlugin Lifecycle Hooks</text>
+
+  <!-- LAYER 2: APPLICATION ORCHESTRATION & UI PRESENTATION LAYER -->
+  <rect x="20" y="198" width="1080" height="132" rx="8" fill="#1e1e1e" stroke="#3a3a3a"/>
+  <text x="36" y="218" fill="#e5a823" font-size="11" font-weight="700" letter-spacing="1">LAYER 2 • UI PRESENTATION, WORKSPACE DOCKS &amp; CENTRAL ORCHESTRATOR (MainWindow)</text>
+
+  <rect x="36" y="228" width="245" height="88" rx="6" fill="url(#cardGrad)" stroke="#555555"/>
+  <text x="50" y="248" fill="#e5a823" font-size="12" font-weight="700">SessionGraph &amp; Media Bins</text>
+  <text x="50" y="266" fill="#cccccc" font-size="11">• Sources &amp; Nested Folders</text>
+  <text x="50" y="282" fill="#cccccc" font-size="11">• Editorial Sequences &amp; Stacks</text>
+  <text x="50" y="298" fill="#cccccc" font-size="11">• Tiled Contact Sheet Layouts</text>
+
+  <rect x="296" y="228" width="255" height="88" rx="6" fill="url(#cardGrad)" stroke="#555555"/>
+  <text x="310" y="248" fill="#e5a823" font-size="12" font-weight="700">PlaybackClock &amp; Timeline</text>
+  <text x="310" y="266" fill="#cccccc" font-size="11">• High-Res Monotonic Frame Timer</text>
+  <text x="310" y="282" fill="#cccccc" font-size="11">• JKL Shuttle (-8x to +8x) &amp; Loops</text>
+  <text x="310" y="298" fill="#cccccc" font-size="11">• In/Out Clamping &amp; Bookmarks</text>
+
+  <rect x="566" y="228" width="255" height="88" rx="6" fill="url(#cardGrad)" stroke="#555555"/>
+  <text x="580" y="248" fill="#e5a823" font-size="12" font-weight="700">AnnotationStore &amp; Markup</text>
+  <text x="580" y="266" fill="#cccccc" font-size="11">• Frame-Keyed Vector Strokes</text>
+  <text x="580" y="282" fill="#cccccc" font-size="11">• Pen, Shapes &amp; In-Canvas Text</text>
+  <text x="580" y="298" fill="#cccccc" font-size="11">• Per-Frame Undo/Redo &amp; Notes</text>
+
+  <rect x="836" y="228" width="248" height="88" rx="6" fill="url(#cardGrad)" stroke="#555555"/>
+  <text x="850" y="248" fill="#e5a823" font-size="12" font-weight="700">Shortcut &amp; Prefs Managers</text>
+  <text x="850" y="266" fill="#cccccc" font-size="11">• 75+ RV/Nuke Hybrid Shortcuts</text>
+  <text x="850" y="282" fill="#cccccc" font-size="11">• Conflict Detection &amp; Aliases</text>
+  <text x="850" y="298" fill="#cccccc" font-size="11">• ~/.openreview/preferences.json</text>
+
+  <!-- LAYER 3: MEDIA DECODING, CACHING & AUDIO SYNC LAYER -->
+  <rect x="20" y="346" width="1080" height="142" rx="8" fill="#1a211e" stroke="#2d4237"/>
+  <text x="36" y="366" fill="#69db7c" font-size="11" font-weight="700" letter-spacing="1">LAYER 3 • ASYNCHRONOUS MEDIA I/O, RING-BUFFER RAM CACHE &amp; AUDIO ENGINE</text>
+
+  <!-- Disk Readers -->
+  <rect x="36" y="378" width="330" height="96" rx="6" fill="url(#cardGrad)" stroke="#69db7c" stroke-width="1.2"/>
+  <text x="50" y="398" fill="#ffffff" font-size="13" font-weight="700">Multi-Threaded ReaderEngine &amp; Decoders</text>
+  <text x="50" y="416" fill="#cccccc" font-size="11">• OpenImageIO / OpenEXR (16f/32f Multi-Part AOVs)</text>
+  <text x="50" y="432" fill="#cccccc" font-size="11">• DPX (10/12/16-bit), TIFF, PNG, JPEG, HDR</text>
+  <text x="50" y="448" fill="#cccccc" font-size="11">• FFmpeg / PyAV / OpenCV Video Stream Decoders</text>
+  <text x="50" y="464" fill="#69db7c" font-size="10" font-family="monospace">Worker Thread Pool (2–16 Threads) • Sequence Parser</text>
+
+  <!-- RingBufferCache -->
+  <rect x="404" y="378" width="340" height="96" rx="6" fill="url(#cardGrad)" stroke="#e5a823" stroke-width="1.5"/>
+  <text x="418" y="398" fill="#e5a823" font-size="13" font-weight="700">RingBufferCache (Thread-Safe RAM Pool)</text>
+  <text x="418" y="416" fill="#cccccc" font-size="11">• Modes: Off, Play-Ahead, In/Out Region, Cache All</text>
+  <text x="418" y="432" fill="#cccccc" font-size="11">• Bidirectional Lookahead (80%) &amp; Lookbehind (20%)</text>
+  <text x="418" y="448" fill="#cccccc" font-size="11">• Zero-Copy Float16 / Float32 / UInt8 Frame Eviction</text>
+  <text x="418" y="464" fill="#e5a823" font-size="10" font-family="monospace">Configurable RAM Budget (1 GB – 64 GB)</text>
+
+  <!-- Audio Engine -->
+  <rect x="782" y="378" width="302" height="96" rx="6" fill="url(#cardGrad)" stroke="#4dabf7" stroke-width="1.2"/>
+  <text x="796" y="398" fill="#ffffff" font-size="13" font-weight="700">AudioEngine (QtMultimedia Sync)</text>
+  <text x="796" y="416" fill="#cccccc" font-size="11">• Sub-Frame Drift Correction (&lt;45ms Threshold)</text>
+  <text x="796" y="432" fill="#cccccc" font-size="11">• 60ms Interactive Scrubbing Audio Bursts</text>
+  <text x="796" y="448" fill="#cccccc" font-size="11">• Dual Offset Calibration (Seconds + Frames)</text>
+  <text x="796" y="464" fill="#4dabf7" font-size="10" font-family="monospace">WAV, MP3, AAC, FLAC, AIFF, MOV, MP4</text>
+
+  <!-- LAYER 4: HARDWARE GPU & COLOR SCIENCE PIPELINE -->
+  <rect x="20" y="504" width="1080" height="156" rx="8" fill="url(#gpuGrad)" stroke="#e5a823" stroke-width="1.5"/>
+  <text x="36" y="524" fill="#e5a823" font-size="11" font-weight="700" letter-spacing="1">LAYER 4 • OPENGL 3.3+ CORE PROFILE GPU ENGINE &amp; REAL-TIME GLSL COLOR PIPELINE (ViewportCanvas)</text>
+
+  <!-- Stage 1: Texture Upload -->
+  <rect x="36" y="538" width="240" height="104" rx="6" fill="#181818" stroke="#666666"/>
+  <text x="48" y="558" fill="#e5a823" font-size="12" font-weight="700">1. GPU Texture &amp; PBO Upload</text>
+  <text x="48" y="576" fill="#cccccc" font-size="11">• Dual Texture Slots (Slot A &amp; B)</text>
+  <text x="48" y="592" fill="#cccccc" font-size="11">• Double-Buffered Async PBO DMA</text>
+  <text x="48" y="608" fill="#cccccc" font-size="11">• RGBA16F / RGBA32F / RGBA8</text>
+  <text x="48" y="626" fill="#888888" font-size="10" font-family="monospace">Linear / Nearest Filtering (N)</text>
+
+  <!-- Stage 2: GLSL Color Grading -->
+  <rect x="304" y="538" width="260" height="104" rx="6" fill="#181818" stroke="#e5a823"/>
+  <text x="316" y="558" fill="#e5a823" font-size="12" font-weight="700">2. GLSL Scene-Linear Grading</text>
+  <text x="316" y="576" fill="#cccccc" font-size="11">• Input Space To Scene-Linear</text>
+  <text x="316" y="592" fill="#cccccc" font-size="11">• Exposure (2^EV), Gain, Offset</text>
+  <text x="316" y="608" fill="#cccccc" font-size="11">• ASC CDL (Slope/Offset/Power) &amp; 3D LUT</text>
+  <text x="316" y="626" fill="#888888" font-size="10" font-family="monospace">Contrast • Saturation • Hue • Gamma</text>
+
+  <!-- Stage 3: OCIO & Comparisons -->
+  <rect x="592" y="538" width="250" height="104" rx="6" fill="#181818" stroke="#e5a823"/>
+  <text x="604" y="558" fill="#e5a823" font-size="12" font-weight="700">3. OCIO v2 &amp; A/B Compositor</text>
+  <text x="604" y="576" fill="#cccccc" font-size="11">• ACES 1.3 / 2.0 / Rec.709 / sRGB</text>
+  <text x="604" y="592" fill="#cccccc" font-size="11">• Split Wipe (Angle/Pos) &amp; Diff Boost</text>
+  <text x="604" y="608" fill="#cccccc" font-size="11">• Channel Isolation (R,G,B,A,Luma)</text>
+  <text x="604" y="626" fill="#888888" font-size="10" font-family="monospace">Invert (Shift+I) • OOR Zebra Clip</text>
+
+  <!-- Stage 4: Overlays & HUDs -->
+  <rect x="870" y="538" width="214" height="104" rx="6" fill="#181818" stroke="#666666"/>
+  <text x="882" y="558" fill="#e5a823" font-size="12" font-weight="700">4. QPainter Overlays &amp; HUDs</text>
+  <text x="882" y="576" fill="#cccccc" font-size="11">• Vector Annotations &amp; Text</text>
+  <text x="882" y="592" fill="#cccccc" font-size="11">• Theatrical Mattes &amp; Safe Guides</text>
+  <text x="882" y="608" fill="#cccccc" font-size="11">• 12 Dockable Floating HUD Cards</text>
+  <text x="882" y="626" fill="#888888" font-size="10" font-family="monospace">32-Bit Float Pixel Samplers</text>
+
+  <!-- Arrows connecting components -->
+  <line x1="366" y1="426" x2="398" y2="426" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowAmber)"/>
+  <line x1="276" y1="590" x2="298" y2="590" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowAmber)"/>
+  <line x1="564" y1="590" x2="586" y2="590" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowAmber)"/>
+  <line x1="842" y1="590" x2="864" y2="590" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowAmber)"/>
+  <line x1="574" y1="474" x2="156" y2="534" stroke="#e5a823" stroke-width="2" marker-end="url(#arrowAmber)"/>
+  <line x1="420" y1="316" x2="920" y2="374" stroke="#4dabf7" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
+  <line x1="196" y1="170" x2="196" y2="222" stroke="#4dabf7" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
+  <line x1="555" y1="170" x2="555" y2="222" stroke="#4dabf7" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
+  <line x1="919" y1="170" x2="919" y2="222" stroke="#69db7c" stroke-width="1.8" marker-end="url(#arrowGreen)"/>
+</svg>

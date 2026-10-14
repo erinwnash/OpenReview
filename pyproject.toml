@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=65.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openreview"
+version = "1.0.0"
+description = "Studio-grade VFX sequence playback, HDR color inspection, compositing comparison, and collaborative dailies review desktop workstation"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Maruthu Chakravarthi" }
+]
+
+[project.urls]
+Homepage = "https://github.com/maruthuvfx/OpenReview"
+Documentation = "https://maruthuvfx.github.io/OpenReview/"
+Repository = "https://github.com/maruthuvfx/OpenReview.git"
+Issues = "https://github.com/maruthuvfx/OpenReview/issues"
+dependencies = [
+    "PySide6>=6.5.0",
+    "numpy>=1.24.0",
+    "opencolorio>=2.3.0",
+    "pillow>=10.0.0",
+    "opencv-python>=4.8.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-qt>=4.4.0"
+]
+
+[project.scripts]
+openreview = "openreview.app:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

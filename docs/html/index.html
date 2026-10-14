@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenReview - Application Documentation &amp; Architecture Manual</title>
+  <link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+  <header class="docs-header">
+    <a href="index.html" class="brand">
+      <span>Open<span class="accent">Review</span></span>
+      <span class="brand-meta">v0.1.0 • By Maruthu Chakravarthi</span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html" class="active">Application &amp; Architecture</a></li>
+      <li><a href="features.html">Features &amp; Shortcuts</a></li>
+      <li><a href="use_cases.html">Use Cases &amp; Workflows</a></li>
+      <li><a href="sdk.html">Python SDK, DCC &amp; Plugins</a></li>
+    </ul>
+  </header>
+
+  <div class="page-wrapper">
+    <!-- Sticky Sidebar Table of Contents -->
+    <aside class="docs-sidebar">
+      <div class="sidebar-title">Application Manual</div>
+      <ul class="toc-list">
+        <li><a href="#overview">Executive Overview</a></li>
+        <li><a href="#system-architecture">1. System Architecture</a></li>
+        <li><a href="#arch-layers" class="sub-link">1.1 Multi-Layered Topology</a></li>
+        <li><a href="#color-pipeline" class="sub-link">1.2 9-Stage GLSL Pipeline</a></li>
+        <li><a href="#caching-engine" class="sub-link">1.3 RingBufferCache &amp; I/O</a></li>
+        <li><a href="#supported-formats" class="sub-link">1.4 Supported Formats</a></li>
+        <li><a href="#workspace-layout">2. Workspace &amp; Dock Panels</a></li>
+        <li><a href="#item-top-bar" class="sub-link">2.1 Top Control Bar</a></li>
+        <li><a href="#item-viewport" class="sub-link">2.2 Viewport Canvas</a></li>
+        <li><a href="#item-sources-dock" class="sub-link">2.3 Sources &amp; Session Dock</a></li>
+        <li><a href="#item-file-browser" class="sub-link">2.4 Inbuilt File Browser Dock</a></li>
+        <li><a href="#item-timeline" class="sub-link">2.5 Timeline &amp; Transport Dock</a></li>
+        <li><a href="#item-status-bar" class="sub-link">2.6 Live Pixel Status Bar</a></li>
+        <li><a href="#item-markup-palette" class="sub-link">2.7 Floating Annotation Palette</a></li>
+        <li><a href="#floating-huds">3. All 12 Floating HUD Panels</a></li>
+        <li><a href="#hud-histogram" class="sub-link">3.1 Live RGB Histogram</a></li>
+        <li><a href="#hud-inspector" class="sub-link">3.2 Pixel Color Inspector</a></li>
+        <li><a href="#hud-wipe" class="sub-link">3.3 A/B Wipe Controller</a></li>
+        <li><a href="#hud-stacking" class="sub-link">3.4 Media Stacking &amp; Layout</a></li>
+        <li><a href="#hud-color-adj" class="sub-link">3.5 Color Adjustments HUD</a></li>
+        <li><a href="#hud-ocio" class="sub-link">3.6 OpenColorIO Config HUD</a></li>
+        <li><a href="#hud-exr-stereo" class="sub-link">3.7 EXR Passes &amp; Stereo 3D</a></li>
+        <li><a href="#hud-annot-mgr" class="sub-link">3.8 Annotation Manager HUD</a></li>
+        <li><a href="#hud-source-details" class="sub-link">3.9 Source Media Details HUD</a></li>
+        <li><a href="#dialogs-windows">4. Studio Dialogs &amp; Diagnostics</a></li>
+        <li><a href="#audio-system">5. Audio System &amp; Sync</a></li>
+        <li><a href="#dailies-sync">6. Multi-User Remote Dailies Sync</a></li>
+        <li><a href="#preferences-storage">7. Preferences &amp; Storage Schema</a></li>
+      </ul>
+    </aside>
+
+    <!-- Main Documentation Body -->
+    <main class="docs-container">
+      <div class="hero-header-row" id="overview">
+        <span class="hero-badge">Production Workstation Manual</span>
+        <span class="author-badge">Author: Maruthu Chakravarthi</span>
+      </div>
+      <h1>OpenReview Application &amp; System Architecture Guide</h1>
+      <p>
+        <strong>OpenReview</strong> (authored by <strong>Maruthu Chakravarthi</strong>) is a studio-grade visual effects (VFX) sequence playback, high-dynamic-range (HDR) color inspection, multi-source compositing comparison, and collaborative dailies review workstation application. Designed with a high-contrast 3DEqualizer / Foundry Nuke / Autodesk RV aesthetic, OpenReview combines a non-blocking multi-threaded C++/Python media engine with an OpenGL 3.3+ Core Profile GLSL fragment shader pipeline and OpenColorIO (OCIO) v2 color science.
+      </p>
+
+      <figure class="doc-figure">
+        <img src="assets/screenshots/workspace_overview.png" alt="OpenReview Main Workspace Overview">
+        <figcaption><strong>Figure 1.0:</strong> OpenReview Primary Studio Workspace featuring the Top Control Bar, Left Sources &amp; Session Manager Dock, Central OpenGL HDR Viewport Canvas, Bottom Full-Width Timeline &amp; Transport Dock, and Live 32-Bit Floating-Point Pixel Readout Status Bar.</figcaption>
+      </figure>
+
+      <div class="card-grid">
+        <div class="card">
+          <h4>⚡ Hardware-Accelerated Playback</h4>
+          <p>OpenGL 3.3+ Core Profile viewport with double-buffered Asynchronous PBO (Pixel Buffer Object) DMA streaming, native <code>RGBA16F</code> / <code>RGBA32F</code> floating-point textures, and multi-threaded disk prefetching.</p>
+        </div>
+        <div class="card">
+          <h4>🎨 ACES &amp; OpenColorIO v2</h4>
+          <p>Zero-latency 9-stage GLSL color grading pipeline supporting scene-linear ACEScg, Cineon/DPX Log, ARRI LogC, 3D LUTs (<code>.cube</code>, <code>.3dl</code>), ASC CDL (<code>.cdl</code>, <code>.cc</code>, <code>.ccc</code>), and Out-of-Range zebra warnings.</p>
+        </div>
+        <div class="card">
+          <h4>🔍 Deep VFX Inspection</h4>
+          <p>Interactive angled A/B split wipes, Difference &amp; Inverted Difference modes with multiplier boost, multi-layer EXR AOV pass switching, Stereoscopic 3D modes, and persistent 32-bit float area color samplers.</p>
+        </div>
+        <div class="card">
+          <h4>🌐 Collaborative &amp; Extensible</h4>
+          <p>Real-time TCP Multi-User Remote Dailies Sync (synchronized playback, live strokes, grades, and chat), JSON-RPC 2.0 Python SDK for Nuke/Maya/Houdini, and a dynamic Plugin/Package Manager.</p>
+        </div>
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- SECTION 1: SYSTEM ARCHITECTURE -->
+      <!-- ================================================================== -->
+      <h2 id="system-architecture">1. System Architecture</h2>
+      <p>
+        OpenReview is engineered around strict separation of concerns across four decoupled architectural layers. All heavy file decoding and sequence prefetching execute asynchronously on background worker threads, while all pixel color transformations execute inside compiled GLSL fragment shaders on the GPU—guaranteeing responsive UI interaction and frame-accurate playback even on 4K/8K 16-bit and 32-bit OpenEXR sequences.
+      </p>
+
+      <figure class="doc-figure" id="arch-layers">
+        <img src="assets/diagrams/system_architecture.svg" alt="OpenReview Multi-Layered System Architecture Diagram">
+        <figcaption><strong>Figure 1.1:</strong> OpenReview 4-Layer System Architecture Topology illustrating the data and control flow between External IPC/Network Peers, Central UI Orchestration, Asynchronous Media I/O &amp; RingBufferCache, and the OpenGL 3.3+ GPU Shader Pipeline.</figcaption>
+      </figure>
+
+      <h3>1.1 Detailed Breakdown of the Four Architectural Layers</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>Core Modules</th>
+            <th>Architectural Responsibilities &amp; Design Patterns</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Layer 1: External Ecosystem, IPC &amp; Collaboration Network</strong></td>
+            <td>
+              <code>network/ipc_server.py</code><br>
+              <code>network/sync_engine.py</code><br>
+              <code>sdk/client.py</code>, <code>sdk/dcc.py</code><br>
+              <code>packages/package_manager.py</code>
+            </td>
+            <td>
+              <ul>
+                <li><strong>JSON-RPC 2.0 IPC Server (<code>IpcServer</code>):</strong> Listens asynchronously on <code>127.0.0.1:45124</code> via Qt's <code>QTcpServer</code> without blocking the GUI event loop. Dispatches external DCC commands (Nuke, Maya, Houdini, CLI) directly to <code>MainWindow</code>.</li>
+                <li><strong>Remote Dailies Sync (<code>DailiesSyncEngine</code>):</strong> Operates as either a multi-client TCP Host Server (default port <code>9090</code>) or Peer Client, broadcasting newline-delimited JSON state packets for frame sync, strokes, grades, and chat.</li>
+                <li><strong>Plugin Engine (<code>PackageManager</code>):</strong> Dynamically discovers, validates (<code>manifest.json</code>), and loads built-in and user plugins (<code>~/.openreview/packages</code>), dispatching lifecycle hooks (<code>on_media_loaded</code>, <code>on_frame_changed</code>, <code>on_annotation_added</code>).</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Layer 2: Application Orchestration, Data Models &amp; UI</strong></td>
+            <td>
+              <code>ui/main_window.py</code><br>
+              <code>models/session_graph.py</code><br>
+              <code>models/annotations.py</code><br>
+              <code>core/clock.py</code><br>
+              <code>core/shortcuts.py</code>
+            </td>
+            <td>
+              <ul>
+                <li><strong>MainWindow Orchestrator:</strong> Connects signals between the <code>PlaybackClock</code>, <code>SessionGraph</code>, <code>RingBufferCache</code>, <code>AudioEngine</code>, and <code>ViewportCanvas</code>.</li>
+                <li><strong>Hierarchical SessionGraph:</strong> Manages Loaded Sources, nested Folders/Bins, Editorial Sequences (EDL-style back-to-back playlists), Multi-Layer Stacks, and Tiled Contact Sheet Layouts.</li>
+                <li><strong>PlaybackClock:</strong> High-precision monotonic timer driving forward/reverse playback, JKL variable shuttle speeds (<code>-8x</code> to <code>+8x</code>), loop modes (Loop, Ping-Pong, Once), In/Out clamping, and frame bookmarks.</li>
+                <li><strong>ShortcutManager:</strong> Singleton event filter intercepting application-wide keypresses with automatic suppression when typing in text editors or spinboxes.</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Layer 3: Asynchronous Media I/O, RAM Cache &amp; Audio Engine</strong></td>
+            <td>
+              <code>core/reader.py</code><br>
+              <code>core/image_io.py</code><br>
+              <code>core/video_reader.py</code><br>
+              <code>core/cache.py</code><br>
+              <code>audio/audio_engine.py</code>
+            </td>
+            <td>
+              <ul>
+                <li><strong>ReaderEngine &amp; Thread Pool:</strong> Uses a configurable pool of background worker threads (default 6 threads) to decode frames ahead of the playhead based on playback direction.</li>
+                <li><strong>Sequence Parser (<code>sequence_parser.py</code>):</strong> Automatically detects frame padding patterns (<code>sh010.####.exr</code>, <code>%04d</code>), start/end frame bounds, and missing/dropped frames on disk.</li>
+                <li><strong>RingBufferCache:</strong> Thread-safe, memory-bounded LRU/windowed frame store supporting four operational modes: <code>Off</code>, <code>Play-Ahead</code>, <code>In/Out Region</code>, and <code>Cache All</code>.</li>
+                <li><strong>AudioEngine:</strong> Synchronizes external or embedded audio streams to the video clock with sub-frame drift correction and 60ms scrubbing audio bursts.</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Layer 4: Hardware GPU &amp; GLSL Color Pipeline</strong></td>
+            <td>
+              <code>widgets/viewport.py</code><br>
+              <code>color/shader_builder.py</code><br>
+              <code>color/ocio_manager.py</code><br>
+              <code>color/lut_manager.py</code>
+            </td>
+            <td>
+              <ul>
+                <li><strong>ViewportCanvas (<code>QOpenGLWidget</code>):</strong> Renders dual high-bit-depth textures (Primary Slot A and Reference Slot B) plus a 3D hardware LUT texture (<code>GL_TEXTURE_3D</code>).</li>
+                <li><strong>Three Selectable Playback Engines:</strong>
+                  <ol>
+                    <li><code>opengl_core</code> — Direct OpenGL 3.3 Core Profile texture streaming.</li>
+                    <li><code>async_pbo</code> — Double-buffered OpenGL Pixel Buffer Object (DMA) asynchronous transfers for zero CPU stall on 4K/8K frames.</li>
+                    <li><code>software_safe</code> — Safe fallback rasterizer for remote desktop / VM environments without hardware GL drivers.</li>
+                  </ol>
+                </li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3 id="color-pipeline">1.2 The 9-Stage GLSL Fragment Shader Color &amp; Compositing Pipeline</h3>
+      <p>
+        Every frame rendered in <code>ViewportCanvas</code> passes through a dynamically compiled GLSL 330 Core fragment shader (<code>color/shader_builder.py</code>). Performing all color science on the GPU preserves full 32-bit floating-point dynamic range (preventing highlight clamping) and allows real-time slider adjustments during 60 FPS playback without invalidating the RAM frame cache.
+      </p>
+
+      <figure class="doc-figure">
+        <img src="assets/diagrams/color_pipeline.svg" alt="OpenReview 9-Stage GLSL Color Pipeline Diagram">
+        <figcaption><strong>Figure 1.2:</strong> The 9-Stage GLSL Fragment Shader Color Science &amp; Compositing Pipeline executed per pixel on the GPU.</figcaption>
+      </figure>
+
+      <ol>
+        <li><strong>Stage 1 — Dual Texture Sampling &amp; Stereoscopic 3D Reconstruction:</strong> Samples normalized UV coordinates from <code>uTextureA</code> (and <code>uTextureB</code> when comparing or viewing stereo pairs). Applies horizontal convergence disparity offsets and reconstructs Anaglyph (Red-Cyan), Side-by-Side, or Stereo Difference views.</li>
+        <li><strong>Stage 2 — Interactive A/B Wipe &amp; Multi-Layer Stack Blending:</strong> Evaluates the signed distance from the interactive wipe plane (defined by <code>uWipePosition</code> and <code>uWipeAngle</code>) or blends Slot A and Slot B using <em>Over (Alpha Composite)</em>, <em>Add</em>, <em>Difference</em> (<code>|A - B| * uDiffBoost</code>), or <em>Difference Inverted</em> (<code>1.0 - |A - B| * uDiffBoost</code>).</li>
+        <li><strong>Stage 3 — Input Colorspace Linearization:</strong> Converts encoded camera/file encodings into scene-linear working space (<code>ACEScg</code>):
+          <ul>
+            <li><strong>Cineon / DPX 10-bit Log:</strong> Applies standard film density log-to-linear transfer curve with black point (95) and white point (685) reconstruction.</li>
+            <li><strong>ARRI ALEXA LogC (v3 &amp; Film):</strong> Applies official ARRI Alexa wide-gamut LogC linearization equations.</li>
+            <li><strong>sRGB / Rec.709 / Gamma 2.2:</strong> Applies exact EOTF inverse power curves to linearize display-referred media.</li>
+          </ul>
+        </li>
+        <li><strong>Stage 4 — Scene-Linear Exposure (EV), Gain &amp; Pre-Grade Offset:</strong> Multiplies scene-linear RGB values by linear gain and F-stop exposure compensation before adding per-channel offset:
+          <code>rgb = (rgb * uGain * exp2(uExposureEV)) + uOffset</code>.</li>
+        <li><strong>Stage 5 — ASC CDL (Slope, Offset, Power, Saturation) &amp; 3D Hardware LUT:</strong> Applies American Society of Cinematographers Color Decision List math <code>pow(clamp(rgb * Slope + Offset, 0.0), Power)</code> followed by trilinear hardware interpolation across the bound 3D LUT texture (<code>.cube</code> or <code>.3dl</code>).</li>
+        <li><strong>Stage 6 — Pivot Contrast, Hue Rotation &amp; Luma-Preserving Saturation:</strong> Evaluates contrast around an 18% middle-grey scene-linear pivot (<code>0.18</code>), rotates chrominance via a 3x3 luminance-preserving hue matrix, and scales saturation using Rec.709 luma weights (<code>Y = 0.2126*R + 0.7152*G + 0.0722*B</code>).</li>
+        <li><strong>Stage 7 — OpenColorIO v2 Display View Transform &amp; Display Gamma:</strong> Applies the selected view transform (<em>ACES 1.3 / 2.0 Filmic Tone Map</em>, <em>sRGB</em>, <em>Rec.709</em>, <em>Gamma 2.2</em>, or <em>Raw Bypass</em>), followed by display power gamma (<code>1.0 / uGamma</code>) and display brightness offset.</li>
+        <li><strong>Stage 8 — Display-Space Color Inversion &amp; Out-of-Range (OOR) Zebra Detection:</strong> When <strong>Invert Colors</strong> (<span class="key-badge">Shift+I</span>) is active, computes <code>rgb = 1.0 - rgb</code>. When <strong>Out-of-Range Highlight</strong> is enabled, flags clipped super-white pixels (<code>&gt; 1.0</code>) in high-contrast <strong>Magenta</strong> and sub-zero negative values (<code>&lt; 0.0</code>) in <strong>Cyan</strong>.</li>
+        <li><strong>Stage 9 — Channel Isolation &amp; Background Compositing:</strong> Isolates <code>RGB</code> (<span class="key-badge">C</span>), <code>Red</code> (<span class="key-badge">R</span>), <code>Green</code> (<span class="key-badge">G</span>), <code>Blue</code> (<span class="key-badge">B</span>), <code>Alpha</code> (<span class="key-badge">A</span>), or <code>Luminance</code> (<span class="key-badge">Y</span>) and composites premultiplied/unpremultiplied alpha over the user-selected canvas background (Solid Black, 18% Neutral Grey, 50% Grey, Solid White, or Checkerboard).</li>
+      </ol>
+
+      <h3 id="caching-engine">1.3 Asynchronous RingBufferCache &amp; Multi-Threaded Prefetching</h3>
+      <p>
+        The <code>RingBufferCache</code> (<code>core/cache.py</code>) and <code>ReaderEngine</code> (<code>core/reader.py</code>) work in tandem to guarantee uninterrupted playback:
+      </p>
+      <ul>
+        <li><strong>Directional Lookahead Windowing:</strong> In <code>Play-Ahead</code> mode, 80% of the RAM budget is allocated ahead of the current playback direction (forward or reverse) and 20% is retained behind the playhead for instant step-back review (configurable via <code>lookahead_behind_pct</code>).</li>
+        <li><strong>Scrub Prioritization &amp; Settle Timer:</strong> During active timeline or canvas mouse scrubbing, background prefetch threads yield 100% CPU priority to the interactive scrub frame. A 150ms settle timer resumes background lookahead caching immediately after the user stops dragging.</li>
+        <li><strong>Coalesced Cache UI Updates:</strong> Timeline cache bar repaints are coalesced at ~15 FPS (66ms interval) so rapid multi-threaded frame insertions never saturate the Qt GUI event loop.</li>
+        <li><strong>Smart Laptop / Low-Spec Proxy Mode:</strong> When <code>fast_playback_laptop_mode</code> is enabled (or on integrated GPUs), frames exceeding 2K resolution are dynamically downsampled 2x during active playback and restored to full 1:1 native resolution the instant playback pauses.</li>
+      </ul>
+
+      <h3 id="supported-formats">1.4 Supported Media &amp; Pipeline Formats</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Format / Extension</th>
+            <th>Bit Depth &amp; Compression Support</th>
+            <th>Auto-Detected Colorspace</th>
+            <th>Primary Studio Pipeline Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>.exr</code>, <code>.hdr</code></td>
+            <td>16-bit Half Float / 32-bit Float (Uncompressed, ZIP, ZIPS, PIZ, RLE, PXR24, B44, DWAA, DWAB)</td>
+            <td><code>ACEScg</code> (Scene-Linear)</td>
+            <td>Final VFX Composites, Multi-Part CG Render Passes (AOVs), Cryptomattes, HDR Lighting Environments</td>
+          </tr>
+          <tr>
+            <td><code>.dpx</code>, <code>.cin</code></td>
+            <td>10-bit Log, 12-bit, 16-bit Linear/Log</td>
+            <td><code>Cineon Log</code></td>
+            <td>Digital Intermediate (DI) Scans, Camera Plates, Master Archival Deliveries</td>
+          </tr>
+          <tr>
+            <td><code>.tif</code>, <code>.tiff</code></td>
+            <td>8-bit, 16-bit Integer, 32-bit Float (Uncompressed, LZW, Deflate)</td>
+            <td>Metadata / <code>sRGB</code></td>
+            <td>Matte Paintings, Displacement/Normal Maps, Photogrammetry Scans</td>
+          </tr>
+          <tr>
+            <td><code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.bmp</code>, <code>.tga</code>, <code>.webp</code></td>
+            <td>8-bit &amp; 16-bit RGBA / RGB</td>
+            <td><code>sRGB (Texture/Video)</code></td>
+            <td>Concept Art, Storyboards, Slates, Quick Review Turntables, Reference Stills</td>
+          </tr>
+          <tr>
+            <td><code>.mov</code>, <code>.mp4</code>, <code>.mkv</code>, <code>.avi</code>, <code>.webm</code>, <code>.mxf</code>, <code>.m4v</code></td>
+            <td>Apple ProRes (422, 422 HQ, 4444, XQ), Avid DNxHD/DNxHR, H.264/AVC, H.265/HEVC</td>
+            <td>Probed via FFmpeg tags (<code>Rec.709</code>, <code>ARRI LogC</code>, <code>sRGB</code>)</td>
+            <td>Editorial Cuts, Offline Reference Movies, Studio Dailies Quicktimes, Playblasts</td>
+          </tr>
+          <tr>
+            <td><code>.wav</code>, <code>.mp3</code>, <code>.aac</code>, <code>.flac</code>, <code>.aiff</code>, <code>.ogg</code>, <code>.m4a</code></td>
+            <td>16-bit / 24-bit / 32-bit Float PCM &amp; Compressed Audio</td>
+            <td><code>Raw Audio</code></td>
+            <td>External Production Sound Mixes, Temp Foley, Dialogue Stems</td>
+          </tr>
+          <tr>
+            <td><code>.ovr</code>, <code>.json</code></td>
+            <td>UTF-8 JSON Structured Session Graph</td>
+            <td>Preserves Per-Source State</td>
+            <td>OpenReview Persistent Session Files (Playlists, Stacks, Layouts, Grades, Bookmarks &amp; Vector Markup)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ================================================================== -->
+      <!-- SECTION 2: WORKSPACE LAYOUT & DOCK PANELS -->
+      <!-- ================================================================== -->
+      <h2 id="workspace-layout">2. Workspace Layout &amp; Dock Panels</h2>
+      <p>
+        OpenReview's interface is built around a central, non-obscured hardware OpenGL viewport surrounded by modular, dockable, and floatable studio panels. Every dock panel supports drag-and-drop tear-off for multi-monitor setups (e.g. placing the Viewport fullscreen on a calibrated grading reference monitor while keeping the Sources Bin, File Browser, and HUDs on a secondary control screen).
+      </p>
+
+      <figure class="doc-figure">
+        <img src="assets/screenshots/workspace_with_file_browser.png" alt="OpenReview Workspace with Sources Dock and File Browser Dock Open">
+        <figcaption><strong>Figure 2.0:</strong> Full Dual-Dock Studio Layout showing the Left <strong>Sources &amp; Session Manager Dock</strong> (<span class="key-badge">`</span>), Central <strong>Viewport Canvas</strong>, Right <strong>Inbuilt File Browser Dock</strong> (<span class="key-badge">Ctrl+B</span>), Top Control Bar, and Bottom Full-Width Timeline.</figcaption>
+      </figure>
+
+      <!-- 2.1 Top Control Bar -->
+      <h3 id="item-top-bar">2.1 Top Control Bar (<code>widgets/top_bar.py</code>)</h3>
+      <p>
+        The <strong>Top Control Bar</strong> provides immediate, single-click access to the most frequently used grading, channel isolation, view transform, and overlay controls without opening modal dialogs. It is housed inside a movable, floatable <code>QToolBar</code>.
+      </p>
+      <figure class="doc-figure">
+        <img src="assets/screenshots/top_control_bar.png" alt="OpenReview Top Control Bar Screenshot">
+        <figcaption><strong>Figure 2.1:</strong> The Top Control Bar featuring Channel Isolation, Exposure (EV) &amp; Linear Gain sliders, Gamma, Saturation, Input Colorspace, OCIO View Transform, Stereo 3D selector, Canvas Scrub toggle, and Quick HUD launchers.</figcaption>
+      </figure>
+      <ul>
+        <li><strong>Channel Isolation Selector:</strong> Instant dropdown &amp; hotkeys for <code>RGB</code> (<span class="key-badge">C</span>), <code>Red</code> (<span class="key-badge">R</span>), <code>Green</code> (<span class="key-badge">G</span>), <code>Blue</code> (<span class="key-badge">B</span>), <code>Alpha</code> (<span class="key-badge">A</span>), and <code>Luminance</code> (<span class="key-badge">Y</span>). Pressing an active channel hotkey a second time toggles back to full <code>RGB</code>.</li>
+        <li><strong>Exposure (EV) &amp; Linear Gain Control:</strong> Dual-coupled Foundry Nuke-style exposure control. Adjusting EV stops (<code>-6.0</code> to <code>+6.0 EV</code>) updates the linear gain multiplier (<code>Gain = 2^EV</code>), and dragging the double-width Gain slider updates EV. <code>Ctrl+Click</code> or double-clicking the slider handle snaps immediately back to <code>0.0 EV (1.0x Gain)</code>.</li>
+        <li><strong>Display Gamma Control:</strong> Adjusts viewer power curve from <code>0.10</code> to <code>4.00</code> (default <code>1.00</code>) with a one-click reset button (<span class="key-badge">Ctrl+Alt+G</span>).</li>
+        <li><strong>Saturation Slider:</strong> Luma-preserving Rec.709 saturation from <code>0.00</code> (monochrome) to <code>4.00</code>.</li>
+        <li><strong>Input Colorspace &amp; Display View Transform Dropdowns:</strong> Live selectors bound to <code>OCIOManager</code> allowing per-source input colorspace overrides and studio display/view LUT switching.</li>
+        <li><strong>Stereo 3D Mode Selector:</strong> Switches between <code>2D (Off)</code>, <code>Left Eye</code>, <code>Right Eye</code>, <code>Anaglyph (Red-Cyan)</code>, <code>Side-by-Side (Split)</code>, and <code>Stereo Difference</code>.</li>
+        <li><strong>Canvas Scrub Mode Button:</strong> Toggles horizontal left-mouse drag frame scrubbing directly inside the viewport canvas.</li>
+      </ul>
+
+      <!-- 2.2 Central Viewport Canvas -->
+      <h3 id="item-viewport">2.2 Central Viewport Canvas (<code>widgets/viewport.py</code>)</h3>
+      <p>
+        The <strong>Viewport Canvas</strong> is the sole central widget of the main window, maximizing screen real estate for shot inspection.
+      </p>
+      <div class="card-grid-2">
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/viewport_safe_guides_matte.png" alt="Viewport Safe Area Guides and Theatrical Matte Overlay">
+          <figcaption><strong>Figure 2.2a:</strong> Viewport displaying 2.35:1 Cinemascope Matte Overlay (<span class="key-badge">Ctrl+M</span>), 90% Action Safe &amp; 80% Title Safe Guides (<span class="key-badge">Shift+G</span>), 3x3 Rule of Thirds Grid, Center Crosshair, and top Info Strip (<span class="key-badge">Ctrl+I</span>).</figcaption>
+        </figure>
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/viewport_out_of_range.png" alt="Viewport Out of Range Zebra Highlight">
+          <figcaption><strong>Figure 2.2b:</strong> Viewport with <strong>Show Out-of-Range Colors</strong> enabled, highlighting clipped super-white HDR pixels (<code>&gt; 1.0</code>) in bright Magenta so compositors can verify unclipped highlights before DI delivery.</figcaption>
+        </figure>
+      </div>
+      <ul>
+        <li><strong>Navigation &amp; Framing:</strong> Pan with Middle-Mouse drag (or Left-Mouse drag when Canvas Scrub is off), zoom smoothly toward the cursor with the Mouse Wheel, Fit to Window (<span class="key-badge">F</span>), Fit Width (<span class="key-badge">Alt+F</span>), or snap to exact pixel scale presets: <code>100% 1:1</code> (<span class="key-badge">1</span> / <span class="key-badge">Ctrl+1</span>), <code>200%</code> (<span class="key-badge">Ctrl+2</span>), <code>400%</code> (<span class="key-badge">Ctrl+4</span>), and <code>800%</code> (<span class="key-badge">Ctrl+8</span>).</li>
+        <li><strong>Geometric &amp; Pixel Transforms:</strong> Horizontal Mirror Flop (<span class="key-badge">Shift+X</span>), Vertical Flip (<span class="key-badge">Shift+Y</span>), Rotation (<code>0°</code>, <code>90° CW</code>, <code>180°</code>, <code>270° CCW</code>), Anamorphic &amp; Broadcast Pixel Aspect Ratios (Square 1.0, NTSC 0.91/1.21, PAL 1.09/1.46, Anamorphic 2:1), and instant Bilinear vs. Nearest-Neighbor pixel filtering (<span class="key-badge">N</span>).</li>
+        <li><strong>Theatrical Mattes &amp; Safe Area Guides:</strong> Aspect ratio masks for <code>1.33:1</code>, <code>1.66:1</code>, <code>1.77:1 (16:9)</code>, <code>1.85:1 (DCI Flat)</code>, <code>2.35:1 (Cinemascope)</code>, and <code>2.40:1</code> with adjustable mask opacity (<code>25%</code>, <code>35%</code>, <code>50%</code>, <code>100%</code> via <span class="key-badge">Shift+M</span>). Broadcast overlays include 90% Action Safe, 80% Title Safe, Center Crosshair, and 3x3 Rule of Thirds Grid, optionally constrained to the active matte box.</li>
+        <li><strong>Onion Skinning (<span class="key-badge">Shift+O</span>):</strong> Renders ghosted previous/next frame overlays for animation spacing and motion tracking QC.</li>
+      </ul>
+
+      <!-- 2.3 Sources & Session Manager Dock -->
+      <h3 id="item-sources-dock">2.3 Sources &amp; Session Manager Dock (<code>ui/sources_panel.py</code>)</h3>
+      <div class="panel-showcase">
+        <img src="assets/screenshots/sources_session_dock.png" alt="Sources and Session Manager Dock Screenshot">
+        <div class="panel-details">
+          <h3>Sources &amp; Session Manager (<span class="key-badge">`</span> / Backtick)</h3>
+          <p>Inspired by Autodesk RV's Session Manager and Premiere Pro's Project Bin, this left dock panel manages all media assets and composite view nodes in the active session:</p>
+          <ul>
+            <li><strong>Sources Tree:</strong> Displays all loaded image sequences, movies, stills, and audio tracks organized into color-coded, collapsible nested folders. Supports drag-and-drop reordering and moving items between folders.</li>
+            <li><strong>Sequences (Editorial Playlists):</strong> String multiple shots together into a continuous multi-clip timeline with automatic cut boundaries and per-clip In/Out handles.</li>
+            <li><strong>Stacks (Multi-Layer Comparison Views):</strong> Layer multiple versions or passes together and switch blend modes (<em>Wipe</em>, <em>A/B Switch</em>, <em>Difference</em>, <em>Inverted Diff</em>, <em>Over</em>, <em>Add</em>). Cycle stack layers rapidly with <span class="key-badge">Z</span> / <span class="key-badge">Shift+Z</span>.</li>
+            <li><strong>Layouts (Tiled Contact Sheets):</strong> Build multi-source grid views (<em>Auto Grid</em>, <em>Side-by-Side</em>, <em>Over/Under</em>, <em>2x2</em>, <em>3x3</em>) with selectable proxy resolution scaling (<code>100%</code>, <code>50%</code>, <code>25%</code>, <code>10%</code>).</li>
+            <li><strong>Source Context Menu &amp; Version Stepping:</strong> Right-click any source to reload media from disk, step version up/down (<span class="key-badge">Alt+Up</span> / <span class="key-badge">Alt+Down</span>), inspect metadata, or assign to Wipe Slot A / Slot B.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 2.4 Inbuilt File Browser Dock -->
+      <h3 id="item-file-browser">2.4 Inbuilt File &amp; Sequence Browser Dock (<code>ui/file_browser_panel.py</code>)</h3>
+      <div class="panel-showcase">
+        <img src="assets/screenshots/file_browser_dock.png" alt="Inbuilt File Browser Dock Screenshot">
+        <div class="panel-details">
+          <h3>Studio File &amp; Sequence Browser (<span class="key-badge">Ctrl+B</span>)</h3>
+          <p>Eliminates OS file dialog friction by providing a VFX-aware media browser docked directly on the right side of the workspace:</p>
+          <ul>
+            <li><strong>Automatic Sequence Collapsing:</strong> Scans directories and collapses hundreds of numbered frame files (e.g., <code>sh010_comp_v002.1001.exr</code> .. <code>1080.exr</code>) into a single clean sequence entry displaying frame range and padding.</li>
+            <li><strong>Persistent Studio Bookmarks:</strong> Pin project roots, shot directories, and daily turnover folders to the quick-access Bookmarks bar (persisted in <code>preferences.json</code>).</li>
+            <li><strong>Dual Loading Actions:</strong> Double-click or press <em>Open</em> to load immediately into the active viewer, or click <em>Add to Bin</em> to append media into the Sources panel without interrupting current playback.</li>
+            <li><strong>Session Launchers:</strong> Detects <code>.ovr</code> session files and lets you either merge/import them into the current workspace or spawn a separate OpenReview OS process instance.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 2.5 Timeline & Transport Dock -->
+      <h3 id="item-timeline">2.5 Seamless Full-Width Timeline &amp; Transport Dock (<code>widgets/timeline.py</code>)</h3>
+      <p>
+        Positioned across the full bottom width of the main window, the <strong>Timeline &amp; Transport Dock</strong> combines tactile transport buttons, numeric frame/timecode controls, a multi-track frame ruler, and a live RAM cache bar.
+      </p>
+      <figure class="doc-figure">
+        <img src="assets/screenshots/timeline_transport_dock.png" alt="Timeline and Transport Dock Screenshot">
+        <figcaption><strong>Figure 2.5:</strong> Full-Width Timeline &amp; Transport Dock showing In/Out bracket markers (<span class="key-badge">[</span> / <span class="key-badge">]</span>), green cached frame region bar, cyan bookmark ticks (<span class="key-badge">M</span>), amber annotated frame indicators, transport buttons, FPS selector, Loop mode button, and Cache mode controls.</figcaption>
+      </figure>
+      <ul>
+        <li><strong>Visual Track Indicators:</strong>
+          <ul>
+            <li><strong>Playhead &amp; Frame Bubble:</strong> High-visibility amber playhead with live frame number or SMPTE Timecode (<code>HH:MM:SS:FF</code>, toggled via <span class="key-badge">Ctrl+T</span>).</li>
+            <li><strong>RAM Cache Bar:</strong> Highlights cached frames in real time so artists know exactly which regions are ready for 60+ FPS zero-drop playback.</li>
+            <li><strong>In / Out Range Brackets:</strong> Visual brackets clamping loop boundaries (<span class="key-badge">[</span> and <span class="key-badge">]</span>, cleared with <span class="key-badge">\</span>).</li>
+            <li><strong>Bookmark &amp; Annotation Ticks:</strong> Distinct colored markers for bookmarked frames (<span class="key-badge">M</span>, navigated with <span class="key-badge">Alt+Left</span> / <span class="key-badge">Alt+Right</span>) and annotated keyframes (navigated with <span class="key-badge">,</span> / <span class="key-badge">.</span>).</li>
+          </ul>
+        </li>
+        <li><strong>Timeline Zoom &amp; Magnifier (<span class="key-badge">Shift+T</span>):</strong> Zoom into long 5,000+ frame editorial timelines using <span class="key-badge">Ctrl+=</span> / <span class="key-badge">Ctrl+-</span> or toggle the <strong>Magnified Timeline Scrub Mini-Ruler</strong> (<span class="key-badge">Shift+T</span>) for single-frame precision.</li>
+      </ul>
+
+      <!-- 2.6 Status Bar -->
+      <h3 id="item-status-bar">2.6 Live Pixel Inspector &amp; Telemetry Status Bar</h3>
+      <figure class="doc-figure">
+        <img src="assets/screenshots/status_bar.png" alt="OpenReview Bottom Status Bar Screenshot">
+        <figcaption><strong>Figure 2.6:</strong> Bottom Status Bar displaying real-time cursor X/Y coordinates, 32-bit float RGBA values, 8-bit integer RGB equivalents, HSV, Rec.709 Luminance (Y), Zoom percentage, RAM Cache usage, clickable GPU Engine badge, Shuttle speed multiplier, Measured FPS, Remote Sync state, and Media Resolution.</figcaption>
+      </figure>
+
+      <!-- 2.7 Floating Annotation Palette -->
+      <h3 id="item-markup-palette">2.7 Top Floating Annotation Capsule Palette (<code>widgets/markup_tools.py</code>)</h3>
+      <p>
+        Pressing <span class="key-badge">X</span> toggles the sleek, auto-centered <strong>Floating Annotation Toolbox</strong> at the top of the viewport canvas.
+      </p>
+      <figure class="doc-figure">
+        <img src="assets/screenshots/floating_annotation_palette.png" alt="Floating Annotation Palette Screenshot">
+        <figcaption><strong>Figure 2.7:</strong> Floating Annotation Capsule Palette (<span class="key-badge">X</span>) providing Pan/Select (<span class="key-badge">Esc</span>), Freehand Pen (<span class="key-badge">D</span>), Line, Arrow, Rectangle, Circle/Ellipse, In-Canvas Text Callout, Color Swatches, Brush Width, Opacity, Undo (<span class="key-badge">Ctrl+Z</span>), Redo (<span class="key-badge">Ctrl+Shift+Z</span>), and Clear Frame (<span class="key-badge">Delete</span>).</figcaption>
+      </figure>
+
+      <!-- ================================================================== -->
+      <!-- SECTION 3: ALL 12 FLOATING HUD PANELS -->
+      <!-- ================================================================== -->
+      <h2 id="floating-huds">3. All 12 In-Viewport Floating &amp; Dockable HUD Cards</h2>
+      <p>
+        OpenReview provides <strong>12 specialized Photoshop/Nuke-style Floating HUD Cards</strong> (<code>widgets/floating_hud.py</code>) that float translucently over the OpenGL viewport. Every HUD card can be dragged anywhere inside the canvas, collapsed, or toggled via keyboard shortcuts and the <strong>Review / Color / Audio</strong> menus.
+      </p>
+
+      <figure class="doc-figure">
+        <img src="assets/screenshots/viewport_annotations_huds.png" alt="Viewport with Active Vector Annotations and Floating HUD Cards">
+        <figcaption><strong>Figure 3.0:</strong> Viewport Canvas demonstrating simultaneous active vector markup (Arrows, Circles, In-Canvas Text Callouts), the top Floating Annotation Palette, the Live RGB Histogram HUD, and the 32-Bit Float Pixel Color Inspector HUD.</figcaption>
+      </figure>
+
+      <!-- 3.1 Live RGB Histogram -->
+      <div class="panel-showcase" id="hud-histogram">
+        <img src="assets/screenshots/hud_histogram.png" alt="Live RGB Histogram HUD Screenshot">
+        <div class="panel-details">
+          <h3>3.1 Live RGB Histogram HUD (<span class="key-badge">H</span>)</h3>
+          <p>Module: <code>widgets/hud_histogram.py</code></p>
+          <ul>
+            <li>Computes and plots real-time Red, Green, Blue, and Luminance distribution curves across 256 bins as frames play or scrub.</li>
+            <li>Provides instant visual feedback on shadow toe crushing, midtone balance, and highlight clipping.</li>
+            <li>Updates dynamically at 60 FPS with minimal CPU overhead using vectorized NumPy histogram binning.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 3.2 Pixel Color Inspector -->
+      <div class="panel-showcase" id="hud-inspector">
+        <img src="assets/screenshots/hud_color_inspector.png" alt="Pixel Color Inspector HUD Screenshot">
+        <div class="panel-details">
+          <h3>3.2 Pixel Color Inspector &amp; Area Analyzer HUD (<span class="key-badge">F5</span> / <span class="key-badge">Alt+C</span>)</h3>
+          <p>Module: <code>widgets/hud_color_inspector.py</code></p>
+          <ul>
+            <li><strong>Live Cursor Probe:</strong> Displays color-coded 32-bit floating-point <code>RGBA</code>, 8-bit <code>0–255</code> integers, <code>HSV</code>, Hex code, and Rec.709 Luminance (<code>Y</code>) with a split color swatch.</li>
+            <li><strong>Aperture Sampling Size:</strong> Sample a single <code>1x1</code> pixel or average across <code>3x3</code>, <code>5x5</code>, or <code>9x9</code> pixel neighborhoods to filter out film grain noise.</li>
+            <li><strong>Persistent Pinned Samplers &amp; Area Box Regions:</strong> Pin up to 8 numbered sample points or drag rectangular area sample boxes on the canvas to monitor Min, Max, and Mean RGBA values across frames.</li>
+            <li><strong>NaN / Inf / Negative Pixel Diagnostics:</strong> Dedicated badge counters alert compositors immediately if a CG render contains corrupted <code>NaN</code>, <code>Infinity</code>, or negative sub-zero pixel values.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 3.3 A/B Wipe Controller -->
+      <div class="panel-showcase" id="hud-wipe">
+        <img src="assets/screenshots/hud_wipe_controller.png" alt="A/B Wipe Controller HUD Screenshot">
+        <div class="panel-details">
+          <h3>3.3 A/B Wipe Comparison Controller HUD (<span class="key-badge">W</span>)</h3>
+          <p>Module: <code>widgets/hud_wipe.py</code></p>
+          <ul>
+            <li><strong>Comparison Modes:</strong> Switch between <em>Split Wipe</em>, <em>A/B Switch</em>, <em>Over (Alpha Composite)</em>, <em>Add</em>, <em>Difference</em>, and <em>Difference (Inverted)</em>.</li>
+            <li><strong>Position &amp; Rotation Angle:</strong> Precisely control split position (<code>0%</code> to <code>100%</code>) and wipe line angle (<code>0°</code> to <code>360°</code>). Flip orientation between horizontal and vertical with <span class="key-badge">Shift+W</span> or reset to center with <span class="key-badge">Alt+W</span>.</li>
+            <li><strong>Swap A &amp; B:</strong> One-click button to swap Primary Slot A and Reference Slot B textures.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 3.4 Media Stacking & Layout HUD -->
+      <div class="panel-showcase" id="hud-stacking">
+        <img src="assets/screenshots/hud_media_stacking.png" alt="Media Stacking and Layout HUD Screenshot">
+        <div class="panel-details">
+          <h3>3.4 Media Stacking &amp; Layout HUD</h3>
+          <p>Module: <code>widgets/hud_stacking.py</code></p>
+          <ul>
+            <li>Provides in-viewport layer management for active Stack and Layout views.</li>
+            <li>Reorder stacked clips, toggle individual layer visibility, adjust blend opacity mix, and configure contact-sheet grid tile arrangements without leaving the canvas.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 3.5 Interactive Color Adjustments HUD -->
+      <div class="panel-showcase" id="hud-color-adj">
+        <img src="assets/screenshots/hud_color_adjustments.png" alt="Interactive Color Adjustments HUD Screenshot">
+        <div class="panel-details">
+          <h3>3.5 Interactive Color Adjustments HUD (<span class="key-badge">/</span>)</h3>
+          <p>Module: <code>ui/color_dialog.py</code></p>
+          <ul>
+            <li><strong>Primary Grading Controls:</strong> Precision sliders and numeric spinboxes for <strong>Exposure (EV)</strong>, <strong>Linear Gain</strong>, <strong>Offset (Black Level)</strong>, <strong>Gamma</strong>, <strong>Contrast (18% Pivot)</strong>, <strong>Saturation</strong>, <strong>Hue Rotation (-180° to +180°)</strong>, and <strong>Display Brightness</strong>.</li>
+            <li><strong>Per-Channel R/G/B Grading:</strong> Expandable per-channel controls to adjust Red, Green, and Blue Slope/Offset/Gamma independently for despill and white-balance matching.</li>
+            <li><strong>Quick Toggles:</strong> Checkboxes for <strong>Invert Colors (<span class="key-badge">Shift+I</span>)</strong>, <strong>Show Out-of-Range Zebra</strong>, and <strong>Reset All (<span class="key-badge">Ctrl+Alt+R</span>)</strong>.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 3.6 OpenColorIO Configuration HUD -->
+      <div class="panel-showcase" id="hud-ocio">
+        <img src="assets/screenshots/hud_ocio_config.png" alt="OpenColorIO Configuration HUD Screenshot">
+        <div class="panel-details">
+          <h3>3.6 OpenColorIO (OCIO v2) Studio Configuration HUD</h3>
+          <p>Module: <code>ui/ocio_dialog.py</code></p>
+          <ul>
+            <li><strong>Custom <code>config.ocio</code> Loader:</strong> Load studio-wide OCIO v2 configuration files (e.g. ACES 1.3 Studio Config, ACES 2.0, or custom show configs) or auto-detect from the <code>$OCIO</code> environment variable.</li>
+            <li><strong>Display, View &amp; Input Space Selection:</strong> Configure active Display device (sRGB, Rec.709, DCI-P3, Rec.2020), View Transform (ACES 1.0 SDR-video, Un-tone-mapped, Raw), and default Working/Input Space.</li>
+            <li><strong>LUT Search Paths:</strong> Manage studio LUT directory search paths for automatic <code>.cube</code>, <code>.3dl</code>, and <code>.cdl</code> resolution.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 3.7 EXR Passes & Stereo 3D HUDs -->
+      <div class="card-grid-2" id="hud-exr-stereo">
+        <div class="panel-showcase" style="grid-template-columns: 1fr; margin:0;">
+          <img src="assets/screenshots/hud_exr_layers.png" alt="EXR Multilayer Pass Inspector HUD Screenshot" style="max-width: 320px; margin: 0 auto;">
+          <div class="panel-details">
+            <h3>3.7a EXR Multilayer Pass Inspector HUD</h3>
+            <p>Module: <code>widgets/hud_layers.py</code> — Lists all embedded AOV render layers inside multi-part OpenEXR files (e.g. <code>RGBA Beauty</code>, <code>diffuse_direct</code>, <code>specular_indirect</code>, <code>emission</code>, <code>crypto_object</code>, <code>depth.Z</code>) for single-click pass switching.</p>
+          </div>
+        </div>
+        <div class="panel-showcase" style="grid-template-columns: 1fr; margin:0;">
+          <img src="assets/screenshots/hud_stereo_3d.png" alt="Stereoscopic 3D HUD Screenshot" style="max-width: 280px; margin: 0 auto;">
+          <div class="panel-details">
+            <h3>3.7b Stereoscopic 3D HUD</h3>
+            <p>Module: <code>widgets/hud_stereo.py</code> — Controls Stereo 3D display mode (2D Off, Left Eye, Right Eye, Red-Cyan Anaglyph, Side-by-Side, Difference), eye swapping, and horizontal disparity convergence offset in pixels.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3.8 Annotation & Notes Manager HUD -->
+      <div class="panel-showcase" id="hud-annot-mgr">
+        <img src="assets/screenshots/hud_annotation_manager.png" alt="Annotation and Review Notes Manager HUD Screenshot">
+        <div class="panel-details">
+          <h3>3.8 Annotation &amp; Review Notes Manager HUD (<span class="key-badge">Ctrl+Shift+A</span>)</h3>
+          <p>Module: <code>ui/annotation_manager_dialog.py</code></p>
+          <ul>
+            <li><strong>Annotated Keyframe Browser:</strong> Displays a live table of every frame containing vector drawings or text review notes, showing stroke counts by shape type and supervisor note summaries.</li>
+            <li><strong>Instant Frame Jump:</strong> Click any row in the table to seek the viewport and timeline directly to that annotated keyframe.</li>
+            <li><strong>Per-Frame Review Notes Editor:</strong> Type detailed supervisor instructions, artist feedback, or ShotGrid task notes linked to the current frame.</li>
+            <li><strong>Multi-Format Review Export &amp; Import:</strong> Export all session notes and burned-in annotated reference frames to <code>JSON</code>, <code>CSV</code> (spreadsheet/ShotGrid import), or formatted <code>Markdown</code> review reports.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 3.9 Source Media Details HUD -->
+      <div class="panel-showcase" id="hud-source-details">
+        <img src="assets/screenshots/hud_source_details.png" alt="Source Media Details HUD Screenshot">
+        <div class="panel-details">
+          <h3>3.9 Source Media Details &amp; Metadata Inspector HUD (<span class="key-badge">I</span>)</h3>
+          <p>Module: <code>ui/image_info_dialog.py</code></p>
+          <ul>
+            <li>Displays comprehensive technical metadata extracted from the active file or sequence: full file path, container format, compression codec (e.g. OpenEXR PIZ/DWAA, ProRes 4444), native resolution, pixel aspect ratio, bit depth, auto-detected color space, frame rate, frame range, SMPTE timecode, and EXR header attributes (render host, Nuke/Houdini version, camera focal length).</li>
+            <li>Includes a <strong>Copy All Metadata</strong> button for pasting technical specs directly into bug reports or pipeline tickets.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- SECTION 4: STUDIO DIALOGS & DIAGNOSTICS -->
+      <!-- ================================================================== -->
+      <h2 id="dialogs-windows">4. Studio Dialogs, Export Pipeline &amp; Diagnostics</h2>
+      <p>
+        In addition to floating HUDs, OpenReview includes dedicated modal and non-modal dialogs for media rendering, plugin management, runtime performance profiling, and diagnostic logging.
+      </p>
+
+      <div class="card-grid-2">
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/dialog_export_media.png" alt="Export Media Dialog Screenshot">
+          <figcaption><strong>Figure 4.1: Export Media Dialog (<span class="key-badge">Ctrl+Shift+E</span>)</strong> — Render active sequences, In/Out ranges, Bookmarked frames, or Annotated keyframes to Apple ProRes / H.264 <code>.mov</code>, <code>PNG</code> sequences, <code>JPEG</code> sequences, or single-frame snapshots with optional <strong>Burn-In Annotations &amp; Color Grading</strong>.</figcaption>
+        </figure>
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/dialog_package_manager.png" alt="Package and Plugin Manager Dialog Screenshot">
+          <figcaption><strong>Figure 4.2: Package &amp; Plugin Manager Dialog</strong> — Discover, enable/disable, install from <code>.zip</code> archives, or uninstall studio plugins and check for application updates.</figcaption>
+        </figure>
+      </div>
+
+      <div class="card-grid-2" style="margin-top: 24px;">
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/dialog_process_info.png" alt="Process Info and Performance Dialog Screenshot">
+          <figcaption><strong>Figure 4.3: Process Info &amp; Performance Dialog</strong> — Real-time telemetry on Python/Qt runtime, active OpenGL GPU context, PBO streaming status, RAM RingBufferCache utilization, worker thread pool, and measured vs. target FPS.</figcaption>
+        </figure>
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/dialog_console_window.png" alt="Diagnostic Console Window Screenshot">
+          <figcaption><strong>Figure 4.4: Diagnostic Console &amp; Error Log Window (<span class="key-badge">Ctrl+Shift+L</span>)</strong> — Captures stdout/stderr streams, Python tracebacks, plugin logs, and OCIO warnings with severity filtering and auto-popup on error.</figcaption>
+        </figure>
+      </div>
+
+      <figure class="doc-figure" style="max-width: 480px; margin: 24px auto;">
+        <img src="assets/screenshots/dialog_goto_frame.png" alt="Go To Frame Modal Dialog Screenshot">
+        <figcaption><strong>Figure 4.5: Frameless Go To Frame HUD Modal (<span class="key-badge">Ctrl+G</span>)</strong> — Keyboard-first modal dialog with automatic range clamping, immediate spinbox focus, and single-Enter confirmation.</figcaption>
+      </figure>
+
+      <!-- ================================================================== -->
+      <!-- SECTION 5: AUDIO SYSTEM & SYNCHRONIZATION -->
+      <!-- ================================================================== -->
+      <h2 id="audio-system">5. Audio System &amp; Sub-Frame Synchronization</h2>
+      <p>
+        OpenReview features a dedicated, studio-grade <strong>AudioEngine</strong> (<code>audio/audio_engine.py</code>) built on <code>PySide6.QtMultimedia</code> (<code>QMediaPlayer</code> and <code>QAudioOutput</code>). It supports both embedded audio tracks inside video containers (<code>.mov</code>, <code>.mp4</code>, <code>.mkv</code>, <code>.avi</code>) and external standalone audio files (<code>.wav</code>, <code>.aiff</code>, <code>.flac</code>, <code>.mp3</code>, <code>.aac</code>, <code>.ogg</code>, <code>.m4a</code>) paired alongside image sequences.
+      </p>
+
+      <figure class="doc-figure">
+        <img src="assets/diagrams/sync_audio_architecture.svg" alt="Audio Sync and Remote Dailies Sync Architecture Diagram">
+        <figcaption><strong>Figure 5.1:</strong> Left: Sub-Frame Audio Synchronization, Dual Offset Math &amp; 60ms Scrubbing Burst Engine. Right: Multi-User Remote Dailies Sync TCP Topology.</figcaption>
+      </figure>
+
+      <div class="panel-showcase">
+        <img src="assets/screenshots/hud_audio_settings.png" alt="Audio Settings and Offsets HUD Screenshot">
+        <div class="panel-details">
+          <h3>Audio Engine Architecture &amp; Controls</h3>
+          <ul>
+            <li><strong>Mathematical Frame-to-Millisecond Mapping:</strong> Given sequence start frame $F_{\text{start}}$, frame rate $\text{FPS}$, frame offset $\Delta F$, and seconds offset $\Delta S$, the target audio timestamp $T_{\text{ms}}$ for any frame $F$ is computed as:
+              <pre><code>rel_frames = (F - start_frame) - offset_frames
+rel_seconds = (rel_frames / fps) - offset_seconds
+target_ms = max(0, int(round(rel_seconds * 1000.0)))</code></pre>
+            </li>
+            <li><strong>Drift Prevention &amp; Hard Resync Threshold (45ms):</strong> During continuous playback, <code>AudioEngine.sync_to_frame(frame, is_playing=True)</code> compares the live hardware audio buffer position against <code>target_ms</code> on every tick. If hardware clock drift exceeds <strong>45 milliseconds</strong> (approx. 1 frame at 24 FPS), the engine executes an immediate sub-frame re-seek—preventing cumulative lip-sync drift across long reels without introducing audible clicks during normal lock.</li>
+            <li><strong>Interactive 60ms Audio Scrubbing Bursts:</strong> When dragging the playhead on the timeline or scrubbing horizontally on the viewport canvas with <em>Audio Scrubbing on Drag</em> enabled, <code>AudioEngine.scrub_at_frame(frame)</code> seeks to <code>target_ms</code>, starts playback at <code>1.0x</code> rate, and arms a single-shot <strong>60ms <code>QTimer</code></strong> (`_scrub_timer`) that automatically pauses the buffer—allowing animators and editors to hear exact dialogue phonemes and transient hits frame-by-frame.</li>
+            <li><strong>Variable Shuttle Rate Matching:</strong> When shuttling via <span class="key-badge">J</span> / <span class="key-badge">L</span>, the audio engine scales <code>QMediaPlayer.setPlaybackRate()</code> dynamically between <code>0.25x</code> and <code>4.0x</code>.</li>
+            <li><strong>Dual Offset Calibration:</strong> Artists can slip audio alignment using both <strong>Offset (Seconds)</strong> (e.g. <code>+0.125s</code>) and <strong>Offset (Frames)</strong> (e.g. <code>-2 frames</code>) simultaneously to compensate for 2-pop leader offsets or editorial handle trims.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- SECTION 6: MULTI-USER REMOTE DAILIES SYNC -->
+      <!-- ================================================================== -->
+      <h2 id="dailies-sync">6. Multi-User Remote Dailies Synchronization</h2>
+      <p>
+        The <strong>Remote Dailies Sync Engine</strong> (<code>network/sync_engine.py</code>, toggled via <span class="key-badge">Ctrl+Shift+D</span>) enables distributed VFX teams, leads, and supervisors to conduct real-time synchronized review sessions over LAN or VPN without video-conferencing compression artifacts—each participant views uncompressed native EXR/DPX media locally on their own calibrated monitor while playback, grading, and annotations stay locked in sync.
+      </p>
+
+      <div class="panel-showcase">
+        <img src="assets/screenshots/hud_dailies_sync.png" alt="Remote Dailies Sync HUD Screenshot">
+        <div class="panel-details">
+          <h3>Collaborative Sync Features (<span class="key-badge">Ctrl+Shift+D</span>)</h3>
+          <ul>
+            <li><strong>Host Server &amp; Peer Client Architecture:</strong> Any OpenReview workstation can click <em>Start Hosting</em> (default TCP port <code>9090</code>) to create a named Dailies Room, while other workstations connect via IP and port.</li>
+            <li><strong>Presenter Lock &amp; Hand-Off:</strong> The designated <strong>Presenter</strong> drives global transport (Play, Pause, Seek, FPS, Loop Mode), active media loading, and live color grading (Exposure, Gain, Gamma, Saturation). Any participant can request or be granted Presenter control.</li>
+            <li><strong>Follow Mode Toggle:</strong> Connected peers have a <em>Follow Presenter</em> toggle. A compositor can uncheck <em>Follow</em> to temporarily inspect an earlier frame locally, then re-enable <em>Follow</em> to snap back to the presenter's playhead.</li>
+            <li><strong>Live Collaborative Whiteboard &amp; Chat:</strong> Vector strokes drawn by any participant (`STROKE_ADD`), frame clears (`ANNOT_CLEAR`), supervisor frame notes (`NOTE_SET`), and room chat messages (`CHAT`) broadcast instantaneously to all connected peers.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ================================================================== -->
+      <!-- SECTION 7: PREFERENCES & STORAGE -->
+      <!-- ================================================================== -->
+      <h2 id="preferences-storage">7. Preferences, GPU Configuration &amp; Persistent Storage</h2>
+      <p>
+        OpenReview persists all workstation settings via <code>PreferencesManager</code> (<code>core/preferences.py</code>) inside a human-readable JSON file at <code>~/.openreview/preferences.json</code> (with automatic synchronization to OS-native <code>QSettings("OpenReview", "OpenReview")</code> as a resilient fallback). Session files are saved in <code>.ovr</code> JSON format via <code>models/session.py</code>.
+      </p>
+
+      <div class="card-grid-2">
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/dialog_preferences_general_and_playback.png" alt="Preferences General and Playback Tab Screenshot">
+          <figcaption><strong>Figure 7.1a: Preferences (<span class="key-badge">Ctrl+,</span>) — General &amp; Playback Tab</strong> (Default FPS, Play Every Frame vs. Realtime Drop-Frame, Startup behavior, Canvas Scrubbing, Auto-Retime).</figcaption>
+        </figure>
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/dialog_preferences_caching.png" alt="Preferences Caching Tab Screenshot">
+          <figcaption><strong>Figure 7.1b: Preferences — Caching &amp; Memory Tab</strong> (Default Cache Mode, Lookahead &amp; Region RAM budgets in GB, Lookbehind percentage, Prefetch worker threads, Texture bit-depth mode).</figcaption>
+        </figure>
+      </div>
+
+      <div class="card-grid-2" style="margin-top: 24px;">
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/dialog_preferences_gpu_acceleration.png" alt="Preferences GPU Acceleration Tab Screenshot">
+          <figcaption><strong>Figure 7.1c: Preferences — GPU Acceleration Tab</strong> (Playback Engine selection: OpenGL Core, Async PBO DMA, Software Safe; Hardware Video Decoding; OpenCL; VSync; VRAM Limit).</figcaption>
+        </figure>
+        <figure class="doc-figure" style="margin:0;">
+          <img src="assets/screenshots/dialog_preferences_keyboard_shortcuts.png" alt="Preferences Keyboard Shortcuts Tab Screenshot">
+          <figcaption><strong>Figure 7.1d: Preferences — Keyboard Shortcuts Tab</strong> (Searchable registry of all 75+ actions with custom key rebinding, live conflict detection, and one-click Reset to Default).</figcaption>
+        </figure>
+      </div>
+
+      <h3>Complete <code>~/.openreview/preferences.json</code> Schema Reference</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>JSON Key</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>default_fps</code></td>
+            <td><code>float</code></td>
+            <td><code>24.0</code></td>
+            <td>Default sequence playback frame rate (e.g. 23.976, 24.0, 25.0, 29.97, 30.0, 48.0, 60.0).</td>
+          </tr>
+          <tr>
+            <td><code>play_all_frames</code></td>
+            <td><code>bool</code></td>
+            <td><code>false</code></td>
+            <td>When <code>true</code>, steps through every frame sequentially without dropping frames; when <code>false</code>, maintains strict wall-clock real-time sync.</td>
+          </tr>
+          <tr>
+            <td><code>default_cache_mode</code></td>
+            <td><code>str</code></td>
+            <td><code>"region"</code></td>
+            <td>Initial RAM cache strategy on startup: <code>"off"</code>, <code>"play_ahead"</code>, <code>"region"</code>, or <code>"all"</code>.</td>
+          </tr>
+          <tr>
+            <td><code>lookahead_cache_gb</code> / <code>region_cache_gb</code></td>
+            <td><code>float</code></td>
+            <td><code>4.0</code></td>
+            <td>Maximum system RAM allocated to the <code>RingBufferCache</code> in Gigabytes.</td>
+          </tr>
+          <tr>
+            <td><code>lookahead_behind_pct</code></td>
+            <td><code>float</code></td>
+            <td><code>20.0</code></td>
+            <td>Percentage of cache window retained behind the playhead for reverse stepping.</td>
+          </tr>
+          <tr>
+            <td><code>playback_texture_mode</code></td>
+            <td><code>str</code></td>
+            <td><code>"auto"</code></td>
+            <td>GPU texture precision: <code>"auto"</code> (<code>RGBA16F</code> on desktop GPUs), <code>"rgba8"</code> (fast laptop), <code>"rgba16f"</code>, or <code>"rgba32f"</code> (full float).</td>
+          </tr>
+          <tr>
+            <td><code>prefetch_buffer_size</code></td>
+            <td><code>int</code></td>
+            <td><code>64</code></td>
+            <td>Number of frames queued ahead in the asynchronous reader prefetch window.</td>
+          </tr>
+          <tr>
+            <td><code>prefetch_worker_threads</code></td>
+            <td><code>int</code></td>
+            <td><code>6</code></td>
+            <td>Number of concurrent background disk I/O worker threads decoding frames.</td>
+          </tr>
+          <tr>
+            <td><code>playback_engine</code></td>
+            <td><code>str</code></td>
+            <td><code>"opengl_core"</code></td>
+            <td>Active rendering backend: <code>"opengl_core"</code>, <code>"async_pbo"</code> (DMA streaming), or <code>"software_safe"</code>.</td>
+          </tr>
+          <tr>
+            <td><code>enable_pbo_streaming</code></td>
+            <td><code>bool</code></td>
+            <td><code>true</code></td>
+            <td>Enables double-buffered OpenGL Pixel Buffer Object DMA texture uploads.</td>
+          </tr>
+          <tr>
+            <td><code>gpu_vram_limit_mb</code></td>
+            <td><code>float</code></td>
+            <td><code>2048.0</code></td>
+            <td>VRAM budget ceiling in Megabytes for GPU texture pools.</td>
+          </tr>
+          <tr>
+            <td><code>ocio_config_path</code>, <code>ocio_display</code>, <code>ocio_view</code>, <code>ocio_input_space</code></td>
+            <td><code>str</code></td>
+            <td><code>""</code></td>
+            <td>Persistent studio OpenColorIO v2 configuration file path and default color transform selections.</td>
+          </tr>
+          <tr>
+            <td><code>shortcuts</code></td>
+            <td><code>dict[str, str]</code></td>
+            <td><code>{}</code></td>
+            <td>User-customized keybinding overrides keyed by canonical <code>action_id</code> (e.g. <code>"color.invert_toggle": "Shift+I"</code>).</td>
+          </tr>
+          <tr>
+            <td><code>recent_files</code> / <code>file_browser_bookmarks</code></td>
+            <td><code>list</code></td>
+            <td><code>[]</code></td>
+            <td>Recently opened media/sessions (up to 15 items) and pinned File Browser studio directory bookmarks.</td>
+          </tr>
+        </tbody>
+      </table>
+
+    </main>
+  </div>
+
+  <footer class="docs-footer">
+    <strong>OpenReview v0.1.0</strong> &bull; Authored by <strong>Maruthu Chakravarthi</strong> &bull; Professional VFX Review &amp; Playback Workstation Documentation
+  </footer>
+
+</body>
+</html>
