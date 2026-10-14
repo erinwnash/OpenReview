@@ -93,17 +93,6 @@ Pre-built standalone distributions for **OpenReview v1.0.0** are hosted directly
 
 ---
 
-## 📚 Official Online Documentation (`docs/html/`)
-
-The complete interactive HTML documentation portal is deployed to **[GitHub Pages](https://maruthuvfx.github.io/OpenReview/)** and is accessible offline inside OpenReview via the **`Help -> Documentation`** menu:
-
-- **[System Architecture Guide](https://maruthuvfx.github.io/OpenReview/index.html)**: 4-Layer architectural topology, GLSL rendering pipeline, memory prefetching ring buffer, and `~/.openreview/preferences.json` reference.
-- **[Features & Shortcuts Encyclopedia](https://maruthuvfx.github.io/OpenReview/features.html)**: Interactive, searchable index of all 78+ studio shortcuts and features.
-- **[Production Use Cases & Workflows](https://maruthuvfx.github.io/OpenReview/use_cases.html)**: Comprehensive guide for Plate vs Comp QC, Multi-Pass EXR AOVs, OCIO grading, audio calibration, and stereoscopic 3D.
-- **[Python SDK & DCC Integration](https://maruthuvfx.github.io/OpenReview/sdk.html)**: Complete JSON-RPC 2.0 IPC protocol reference with ready-to-run integration scripts for Foundry Nuke, Autodesk Maya, SideFX Houdini, and Blender.
-
----
-
 ## ⌨️ Essential Keyboard Shortcuts
 
 | Category | Action | Primary Key | Secondary / Aliases |
@@ -202,8 +191,6 @@ def send_read_node_to_openreview():
 
 nuke.menu("Nuke").addCommand("OpenReview/Send Selected Clip", send_read_node_to_openreview, "ctrl+shift+r")
 ```
-
-See [docs/html/sdk.html](https://maruthuvfx.github.io/OpenReview/sdk.html) for complete integration examples.
 
 ---
 
