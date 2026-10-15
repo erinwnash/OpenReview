@@ -119,7 +119,9 @@ class AudioSettingsWidget(QWidget):
         track_layout.addWidget(self.lbl_track_path)
 
         track_btn_layout = QHBoxLayout()
-        self.btn_load_audio = QPushButton("📁 Load Audio Track...", grp_track)
+        from openreview.resources import get_vfx_icon
+        self.btn_load_audio = QPushButton("Load Audio Track...", grp_track)
+        self.btn_load_audio.setIcon(get_vfx_icon("folder"))
         self.btn_load_audio.clicked.connect(self._on_browse_audio)
         track_btn_layout.addWidget(self.btn_load_audio)
 

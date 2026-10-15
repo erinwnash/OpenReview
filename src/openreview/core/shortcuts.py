@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
-from PySide6.QtCore import QObject, Signal, QEvent, Qt
+from PySide6.QtCore import QObject, Signal, QEvent, Qt, QKeyCombination
 from PySide6.QtGui import QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (
     QWidget,
@@ -593,11 +593,14 @@ class ShortcutManager(QObject):
 
         # Dynamic keypad fallback: strip KeypadModifier to match standard shortcuts transparently
         if not action_id and (event.modifiers() & Qt.KeyboardModifier.KeypadModifier):
-            clean_mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
-            clean_combo = event.key() | clean_mods
-            clean_seq = QKeySequence(clean_combo).toString(QKeySequence.SequenceFormat.PortableText)
-            clean_norm = self.normalize_key_sequence(clean_seq)
-            action_id = self._key_map.get(clean_norm) or self._aliases.get(clean_norm)
+            try:
+                clean_mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+                clean_combo = QKeyCombination(clean_mods, Qt.Key(event.key()))
+                clean_seq = QKeySequence(clean_combo).toString(QKeySequence.SequenceFormat.PortableText)
+                clean_norm = self.normalize_key_sequence(clean_seq)
+                action_id = self._key_map.get(clean_norm) or self._aliases.get(clean_norm)
+            except Exception:
+                pass
 
         # Secondary fallback: match directly by key text if modifier is none (e.g. '/' or 'c' or 'e')
         if not action_id and event.text() and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):

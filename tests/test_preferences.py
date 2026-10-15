@@ -14,7 +14,7 @@ def test_user_preferences_defaults():
     assert prefs.canvas_scrub_enabled is True
     assert prefs.auto_retime_mismatched_fps is True
     assert prefs.play_all_frames is True
-    assert prefs.default_cache_mode == "region"
+    assert prefs.default_cache_mode == "off"
     assert prefs.lookahead_cache_gb == 4.0
     assert prefs.region_cache_gb == 4.0
     assert prefs.lookahead_behind_pct == 20.0
@@ -46,7 +46,7 @@ def test_preferences_dialog(qapp, tmp_path):
 
     dlg = PreferencesDialog(mgr)
     assert dlg.spin_fps.value() == 24.0
-    assert dlg.combo_cache_mode.currentData() == "region"
+    assert dlg.combo_cache_mode.currentData() == "off"
 
     # Edit dialog fields
     dlg.spin_fps.setValue(60.0)
@@ -59,3 +59,30 @@ def test_preferences_dialog(qapp, tmp_path):
     assert mgr.prefs.default_fps == 60.0
     assert mgr.prefs.start_fullscreen is True
     assert mgr.prefs.default_cache_mode == "play_ahead"
+
+
+def test_preferences_clear_disk_cache(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+
+    mgr = PreferencesManager(config_dir=tmp_path)
+    dlg = PreferencesDialog(mgr)
+    # Trigger clear disk cache button handler
+    dlg._on_clear_disk_cache_clicked()
+
+
+def test_mainwindow_cache_off_by_default(qtbot, tmp_path, monkeypatch):
+    from openreview.ui.main_window import MainWindow
+    from openreview.core.cache import CacheMode
+
+    # Ensure isolated empty preferences directory
+    monkeypatch.setattr(PreferencesManager, "instance", lambda: PreferencesManager(config_dir=tmp_path))
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    assert win.cache.mode == CacheMode.OFF
+    assert win.timeline.combo_cache_mode.currentData() == "off"
+    assert win.timeline.combo_cache_mode.currentIndex() == 0
+    assert win.timeline.cache_bar._cache_mode == "off"
+    win.close()

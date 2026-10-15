@@ -5,9 +5,14 @@ Provides bounded in-memory frame storage, lookahead prefetching, and LRU evictio
 from __future__ import annotations
 
 from enum import Enum
+import atexit
+import collections
 import ctypes
 import os
+import re
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from typing import Dict, List, Optional, Set, Tuple, Union, Any
@@ -113,6 +118,251 @@ class CacheMode(str, Enum):
     ALL = "all"                    # Full sequence cache
 
 
+class DiskFrameCache:
+    """
+    Tier-2 Disk Frame Cache storing frames on the system temporary drive.
+    - Stores frames as fast float16 or uint8 NumPy .npy files.
+    - Thread-safe write and read operations.
+    - Enforces a dynamic disk budget (default 20 GB or 50% available disk space).
+    - Evicts least-recently-used (LRU) files when disk budget is exceeded.
+    - Cleans up temporary cache directory on application shutdown.
+    """
+
+    def __init__(
+        self,
+        cache_dir: Optional[str] = None,
+        max_disk_mb: Optional[float] = None,
+        auto_cleanup: bool = True,
+    ):
+        self._lock = threading.Lock()
+        if cache_dir is None:
+            base_temp = os.path.join(tempfile.gettempdir(), "OpenReview_Cache")
+            self._cache_dir = os.path.join(base_temp, f"session_{os.getpid()}_{id(self)}")
+        else:
+            self._cache_dir = cache_dir
+
+        os.makedirs(self._cache_dir, exist_ok=True)
+        self._auto_cleanup = auto_cleanup
+        self._cleaned_up = False
+
+        if max_disk_mb is not None:
+            self._max_disk_bytes = int(max(0.01, float(max_disk_mb)) * 1024 * 1024)
+        else:
+            self._max_disk_bytes = self._calculate_default_budget_bytes()
+
+        self._disk_files: Dict[Tuple[str, int], str] = {}  # (source_id, frame) -> file_path
+        self._disk_bytes: Dict[Tuple[str, int], int] = {}  # (source_id, frame) -> byte_size
+        self._access_times: Dict[Tuple[str, int], float] = {}  # (source_id, frame) -> last_access_ts
+        self._source_frames: Dict[str, Set[int]] = collections.defaultdict(set)
+        self._used_disk_bytes: int = 0
+
+        if self._auto_cleanup:
+            atexit.register(self.cleanup)
+
+    def _calculate_default_budget_bytes(self) -> int:
+        """Default budget: 20 GB or 50% free disk space, whichever is smaller (min 512 MB)."""
+        try:
+            total, used, free = shutil.disk_usage(self._cache_dir)
+            cap_20gb = 20 * 1024 * 1024 * 1024
+            half_free = int(free * 0.50)
+            return max(512 * 1024 * 1024, min(cap_20gb, half_free))
+        except Exception:
+            return 20 * 1024 * 1024 * 1024
+
+    def _file_path(self, source_id: str, frame: int) -> str:
+        safe_sid = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(source_id))
+        return os.path.join(self._cache_dir, f"frame_{safe_sid}_{frame}.npy")
+
+    @property
+    def cache_dir(self) -> str:
+        return self._cache_dir
+
+    @property
+    def max_disk_mb(self) -> float:
+        with self._lock:
+            return self._max_disk_bytes / (1024.0 * 1024.0)
+
+    def set_max_disk_mb(self, mb: float) -> None:
+        with self._lock:
+            self._max_disk_bytes = int(max(0.01, float(mb)) * 1024 * 1024)
+            self._evict_if_needed_locked()
+
+    def has(self, source_id: str, frame: int) -> bool:
+        if not source_id:
+            return False
+        key = (source_id, frame)
+        with self._lock:
+            return key in self._disk_files
+
+    def get(self, source_id: str, frame: int) -> Optional[np.ndarray]:
+        if not source_id:
+            return None
+        key = (source_id, frame)
+        path = None
+        with self._lock:
+            if key in self._disk_files:
+                path = self._disk_files[key]
+                self._access_times[key] = time.time()
+        if path and os.path.exists(path):
+            try:
+                arr = np.load(path)
+                return arr
+            except Exception:
+                self.delete(source_id, frame)
+                return None
+        return None
+
+    def put(self, source_id: str, frame: int, image_data: np.ndarray) -> bool:
+        if not source_id or image_data is None:
+            return False
+        key = (source_id, frame)
+        save_arr = image_data
+        if isinstance(image_data, np.ndarray) and image_data.dtype == np.float32:
+            try:
+                save_arr = image_data.astype(np.float16, copy=False)
+            except Exception:
+                save_arr = image_data
+
+        path = self._file_path(source_id, frame)
+        safe_sid = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(source_id))
+        tmp_path = os.path.join(self._cache_dir, f"tmp_{os.getpid()}_{threading.get_ident()}_{safe_sid}_{frame}.npy")
+        try:
+            np.save(tmp_path, save_arr)
+            os.replace(tmp_path, path)
+            file_bytes = os.path.getsize(path)
+        except Exception:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            return False
+
+        with self._lock:
+            if key in self._disk_files:
+                self._used_disk_bytes -= self._disk_bytes.get(key, 0)
+            self._disk_files[key] = path
+            self._disk_bytes[key] = file_bytes
+            self._access_times[key] = time.time()
+            self._used_disk_bytes += file_bytes
+            self._source_frames[source_id].add(frame)
+            self._evict_if_needed_locked()
+        return True
+
+    def delete(self, source_id: str, frame: int) -> None:
+        key = (source_id, frame)
+        path = None
+        with self._lock:
+            if key in self._disk_files:
+                path = self._disk_files.pop(key, None)
+                b = self._disk_bytes.pop(key, 0)
+                self._access_times.pop(key, None)
+                self._used_disk_bytes -= b
+                if source_id in self._source_frames:
+                    self._source_frames[source_id].discard(frame)
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+    def clear_source(self, source_id: str) -> None:
+        if not source_id:
+            return
+        to_del = []
+        with self._lock:
+            self._source_frames.pop(source_id, None)
+            keys = [k for k in self._disk_files.keys() if k[0] == source_id]
+            for k in keys:
+                path = self._disk_files.pop(k, None)
+                b = self._disk_bytes.pop(k, 0)
+                self._access_times.pop(k, None)
+                self._used_disk_bytes -= b
+                if path:
+                    to_del.append(path)
+        for p in to_del:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+    def clear(self) -> None:
+        to_del = []
+        with self._lock:
+            self._source_frames.clear()
+            to_del = list(self._disk_files.values())
+            self._disk_files.clear()
+            self._disk_bytes.clear()
+            self._access_times.clear()
+            self._used_disk_bytes = 0
+        for p in to_del:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+    def _evict_if_needed_locked(self) -> None:
+        if self._used_disk_bytes <= self._max_disk_bytes:
+            return
+        sorted_keys = sorted(self._disk_files.keys(), key=lambda k: self._access_times.get(k, 0.0))
+        for k in sorted_keys:
+            if self._used_disk_bytes <= self._max_disk_bytes:
+                break
+            path = self._disk_files.pop(k, None)
+            b = self._disk_bytes.pop(k, 0)
+            self._access_times.pop(k, None)
+            self._used_disk_bytes -= b
+            sid, frm = k
+            if sid in self._source_frames:
+                self._source_frames[sid].discard(frm)
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+    def get_stats(self) -> Tuple[float, float, float]:
+        with self._lock:
+            used_mb = self._used_disk_bytes / (1024.0 * 1024.0)
+            max_mb = self._max_disk_bytes / (1024.0 * 1024.0)
+            pct = (self._used_disk_bytes / self._max_disk_bytes) * 100.0 if self._max_disk_bytes > 0 else 0.0
+            return used_mb, max_mb, pct
+
+    def get_cached_frames(self, source_id: Optional[str] = None) -> Set[int]:
+        with self._lock:
+            if source_id:
+                return set(self._source_frames.get(source_id, set()))
+            return {k[1] for k in self._disk_files.keys()}
+
+    def get_source_cached_count(self, source_id: str) -> int:
+        with self._lock:
+            return len(self._source_frames.get(source_id, ()))
+
+    def cleanup(self) -> None:
+        with self._lock:
+            if self._cleaned_up:
+                return
+            self._cleaned_up = True
+            files = list(self._disk_files.values())
+            self._disk_files.clear()
+            self._disk_bytes.clear()
+            self._access_times.clear()
+            self._used_disk_bytes = 0
+        for f in files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except Exception:
+                pass
+        try:
+            if os.path.exists(self._cache_dir):
+                shutil.rmtree(self._cache_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 class RingBufferCache(QObject):
     """
     Thread-safe RAM ring buffer for image review frames.
@@ -124,6 +374,7 @@ class RingBufferCache(QObject):
 
     cache_changed = Signal()  # Emitted when cached frame set changes
     memory_usage_changed = Signal(float, float)  # used_mb, max_mb
+    disk_usage_changed = Signal(float, float)  # disk_used_mb, disk_max_mb
     mode_changed = Signal(str)  # Emitted when cache mode changes ('off', 'play_ahead', 'region', 'all')
 
     def __init__(
@@ -133,6 +384,9 @@ class RingBufferCache(QObject):
         lookbehind_frames: int = 16,
         mode: CacheMode = CacheMode.OFF,
         auto_memory_budget: bool = False,
+        enable_disk_cache: bool = True,
+        max_disk_mb: Optional[float] = None,
+        disk_cache_dir: Optional[str] = None,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -142,7 +396,7 @@ class RingBufferCache(QObject):
         initial_mb = (
             compute_dynamic_ram_budget_mb(0)
             if max_memory_mb is None
-            else max(128.0, float(max_memory_mb))
+            else max(0.01, float(max_memory_mb))
         )
         self._max_memory_bytes = int(initial_mb * 1024 * 1024)
         self._lookahead = lookahead_frames
@@ -166,6 +420,14 @@ class RingBufferCache(QObject):
         self._layer_bytes: Dict[Tuple[str, int, str], int] = {}
         self._layer_used_bytes: int = 0
         self._max_layer_memory_bytes: int = int(self._max_memory_bytes * 0.5)  # 50% budget for raw layers
+
+        # Tier 3 Storage: High-capacity Temp Drive Disk Cache
+        self._disk_cache_enabled = bool(enable_disk_cache)
+        self._disk_cache = DiskFrameCache(
+            cache_dir=disk_cache_dir,
+            max_disk_mb=max_disk_mb,
+            auto_cleanup=True,
+        )
 
     # --------------------------------------------------------------------------
     # Configuration
@@ -240,11 +502,35 @@ class RingBufferCache(QObject):
                 self._evict_if_needed(self._current_playhead)
             self._emit_status()
 
+    @property
+    def disk_cache_enabled(self) -> bool:
+        return self._disk_cache_enabled
+
+    def set_disk_cache_enabled(self, enabled: bool) -> None:
+        self._disk_cache_enabled = bool(enabled)
+        if not self._disk_cache_enabled and self._disk_cache:
+            self._disk_cache.clear()
+        self._emit_status()
+
+    @property
+    def disk_cache(self) -> DiskFrameCache:
+        return self._disk_cache
+
+    def set_max_disk_mb(self, mb: float) -> None:
+        if self._disk_cache:
+            self._disk_cache.set_max_disk_mb(mb)
+            self._emit_status()
+
+    def get_disk_memory_stats(self) -> Tuple[float, float, float]:
+        if self._disk_cache:
+            return self._disk_cache.get_stats()
+        return 0.0, 0.0, 0.0
+
     def set_max_memory_mb(self, mb: float, auto: bool = False) -> None:
         """Update maximum memory budget in megabytes."""
         with self._lock:
             self._auto_memory_budget = bool(auto)
-            self._max_memory_bytes = int(max(128.0, mb) * 1024 * 1024)
+            self._max_memory_bytes = int(max(1.0, mb) * 1024 * 1024)
             self._max_layer_memory_bytes = int(self._max_memory_bytes * 0.5)
             self._evict_if_needed(self._current_playhead)
         self._emit_status()
@@ -258,21 +544,52 @@ class RingBufferCache(QObject):
     # Source-Level Cache Access
     # --------------------------------------------------------------------------
     def get_source_frame(self, source_id: str, frame: int) -> Optional[np.ndarray]:
-        """Retrieve a cached frame for a specific input source."""
+        """Retrieve a cached frame for a specific input source (RAM first, then Temp Disk)."""
         if self._mode == CacheMode.OFF or not source_id:
             return None
         with self._lock:
-            return self._frames.get((source_id, frame))
+            ram_res = self._frames.get((source_id, frame))
+            if ram_res is not None:
+                return ram_res
+        if self._disk_cache_enabled and self._disk_cache:
+            disk_res = self._disk_cache.get(source_id, frame)
+            if disk_res is not None:
+                return disk_res
+        return None
 
     def has_source_frame(self, source_id: str, frame: int) -> bool:
-        """Check if a specific source frame is already in RAM cache."""
+        """Check if a specific source frame is in RAM or Temp Disk cache."""
+        if self._mode == CacheMode.OFF or not source_id:
+            return False
+        with self._lock:
+            if (source_id, frame) in self._frames:
+                return True
+        if self._disk_cache_enabled and self._disk_cache:
+            return self._disk_cache.has(source_id, frame)
+        return False
+
+    def has_source_frame_ram(self, source_id: str, frame: int) -> bool:
+        """Check if frame is in Tier-1 RAM cache specifically."""
         if self._mode == CacheMode.OFF or not source_id:
             return False
         with self._lock:
             return (source_id, frame) in self._frames
 
-    def put_source_frame(self, source_id: str, frame: int, image_data: np.ndarray, mtime: Optional[float] = None) -> None:
-        """Store a frame for a specific source into the shared RAM pool."""
+    def has_source_frame_disk(self, source_id: str, frame: int) -> bool:
+        """Check if frame is in Tier-2 Temp Disk cache specifically."""
+        if not self._disk_cache_enabled or not self._disk_cache or not source_id:
+            return False
+        return self._disk_cache.has(source_id, frame)
+
+    def put_source_frame(
+        self,
+        source_id: str,
+        frame: int,
+        image_data: np.ndarray,
+        mtime: Optional[float] = None,
+        write_to_disk: bool = False,
+    ) -> None:
+        """Store a frame for a specific source into the shared RAM pool (and optionally Temp Disk)."""
         if self._mode == CacheMode.OFF or not source_id or image_data is None:
             return
 
@@ -298,7 +615,22 @@ class RingBufferCache(QObject):
             self._refresh_auto_budget_locked()
             self._evict_if_needed(self._current_playhead)
 
+        if write_to_disk and self._disk_cache_enabled and self._disk_cache:
+            threading.Thread(
+                target=self._disk_cache.put,
+                args=(source_id, frame, image_data),
+                daemon=True,
+            ).start()
+
         self._emit_status()
+
+    def put_source_frame_disk_only(self, source_id: str, frame: int, image_data: np.ndarray) -> bool:
+        """Store frame directly into Temp Disk cache without consuming RAM pool."""
+        if not self._disk_cache_enabled or not self._disk_cache or not source_id or image_data is None:
+            return False
+        res = self._disk_cache.put(source_id, frame, image_data)
+        self._emit_status()
+        return res
 
     # --------------------------------------------------------------------------
     # Tier 2: Multi-Channel Layer Cache Access
@@ -350,7 +682,7 @@ class RingBufferCache(QObject):
             self._layer_used_bytes = 0
 
     def clear_source(self, source_id: str) -> None:
-        """Clear cached frames for a specific source only."""
+        """Clear cached frames for a specific source from RAM and Temp Disk."""
         if not source_id:
             return
         with self._lock:
@@ -364,6 +696,9 @@ class RingBufferCache(QObject):
             for k in layer_keys:
                 self._layer_used_bytes -= self._layer_bytes.pop(k, 0)
                 self._layer_cache.pop(k, None)
+
+        if self._disk_cache:
+            self._disk_cache.clear_source(source_id)
         self._emit_status()
 
     def clear_source_frame(self, source_id: str, frame: int) -> None:
@@ -374,6 +709,8 @@ class RingBufferCache(QObject):
                 self._used_bytes -= self._frame_bytes.pop(key, 0)
                 self._frames.pop(key, None)
                 self._frame_mtimes.pop(key, None)
+        if self._disk_cache:
+            self._disk_cache.delete(source_id, frame)
         self._emit_status()
 
     def get_source_frame_mtime(self, source_id: str, frame: int) -> Optional[float]:
@@ -383,11 +720,33 @@ class RingBufferCache(QObject):
             return self._frame_mtimes.get(key)
 
     def get_source_cached_frames(self, source_id: str) -> Set[int]:
-        """Return the set of cached frame numbers for a specific source."""
+        """Return the set of RAM-cached frame numbers for a specific source."""
         if not source_id:
             return set()
         with self._lock:
             return {k[1] for k in self._frames.keys() if isinstance(k, tuple) and k[0] == source_id}
+
+    def get_source_disk_cached_frames(self, source_id: str) -> Set[int]:
+        """Return the set of Temp-disk-cached frame numbers for a specific source."""
+        if not self._disk_cache_enabled or not self._disk_cache or not source_id:
+            return set()
+        return self._disk_cache.get_cached_frames(source_id)
+
+    def get_source_disk_cached_count(self, source_id: str) -> int:
+        """Return the count of Temp-disk-cached frames for a specific source."""
+        if not self._disk_cache_enabled or not self._disk_cache or not source_id:
+            return 0
+        return self._disk_cache.get_source_cached_count(source_id)
+
+    def get_all_source_cached_frames(self, source_id: str) -> Set[int]:
+        """Return union of RAM and disk cached frame numbers for a specific source."""
+        return self.get_source_cached_frames(source_id) | self.get_source_disk_cached_frames(source_id)
+
+    def get_disk_cached_frames(self) -> Set[int]:
+        """Return cached frame numbers on temp disk for the active source context."""
+        if not self._disk_cache_enabled or not self._disk_cache:
+            return set()
+        return self._disk_cache.get_cached_frames(self._active_source_id)
 
     # --------------------------------------------------------------------------
     # Timeline & Compatibility Cache Access
@@ -442,7 +801,7 @@ class RingBufferCache(QObject):
         self._emit_status()
 
     def clear(self) -> None:
-        """Clear all cached frames from memory."""
+        """Clear all cached frames from memory and temp disk."""
         with self._lock:
             self._frames.clear()
             self._frame_bytes.clear()
@@ -451,6 +810,8 @@ class RingBufferCache(QObject):
             self._layer_cache.clear()
             self._layer_bytes.clear()
             self._layer_used_bytes = 0
+        if self._disk_cache:
+            self._disk_cache.clear()
         self._emit_status()
 
     def update_playhead(self, playhead: int) -> None:
@@ -557,6 +918,17 @@ class RingBufferCache(QObject):
             if frame_num == playhead and _is_active_source(k) and len(self._frames) > 1:
                 continue
 
+            # Spill to temp drive disk cache if enabled
+            if self._disk_cache_enabled and self._disk_cache is not None and isinstance(k, tuple):
+                sid = k[0]
+                frm = k[1]
+                frame_data = self._frames.get(k)
+                if frame_data is not None and not self._disk_cache.has(sid, frm):
+                    try:
+                        self._disk_cache.put(sid, frm, frame_data)
+                    except Exception:
+                        pass
+
             b = self._frame_bytes.pop(k, 0)
             self._frames.pop(k, None)
             self._used_bytes -= b
@@ -565,3 +937,6 @@ class RingBufferCache(QObject):
         used_mb, max_mb, _ = self.get_memory_stats()
         self.cache_changed.emit()
         self.memory_usage_changed.emit(used_mb, max_mb)
+        if self._disk_cache:
+            d_used, d_max, _ = self._disk_cache.get_stats()
+            self.disk_usage_changed.emit(d_used, d_max)

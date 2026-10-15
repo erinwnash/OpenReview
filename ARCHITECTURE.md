@@ -1,7 +1,7 @@
 # OpenReview System Architecture Specification
 
 **Author:** Maruthu Chakravarthi  
-**Version:** 0.1.0  
+**Version:** 1.0.0  
 **HTML Portal:** [docs/html/index.html](file:///e:/works/Pipeline/code/OpenReview/docs/html/index.html)
 
 OpenReview is a studio-grade visual effects (VFX) sequence playback, high-dynamic-range (HDR) color inspection, multi-source compositing comparison, and collaborative dailies review workstation application built on **Python 3.10+**, **PySide6 (Qt 6)**, **OpenGL 3.3+ Core Profile**, and **OpenColorIO v2**.
@@ -19,6 +19,7 @@ flowchart TB
         IPC["IpcServer (TCP 127.0.0.1:45124)<br/>JSON-RPC 2.0 Dispatcher"]
         Sync["DailiesSyncEngine (TCP :9090)<br/>Host Server & Peer Clients"]
         PkgMgr["PackageManager<br/>(Built-in & ~/.openreview/packages)"]
+        FileAssoc["FileAssociations<br/>(Win Registry / Linux XDG MIME)"]
     end
 
     subgraph L2 ["Layer 2: Application Orchestration, Data Models & UI (MainWindow)"]
@@ -27,18 +28,23 @@ flowchart TB
         Clock["PlaybackClock<br/>(Monotonic Timer, JKL Shuttle, In/Out, Bookmarks)"]
         Annot["AnnotationStore<br/>(Frame-Keyed Vector Strokes, Undo/Redo, Notes)"]
         Shortcuts["ShortcutManager & PreferencesManager<br/>(78+ Hotkeys, ~/.openreview/preferences.json)"]
+        Console["ConsoleDialog<br/>(Live Log Stream, Level Filtering, Auto-Popup)"]
+        ExportDlg["ExportMediaDialog<br/>(EXR, MOV, ProRes, DNxHD, H.264, DPX, TIFF, PNG)"]
     end
 
-    subgraph L3 ["Layer 3: Asynchronous Media I/O, RingBufferCache & Audio Engine"]
+    subgraph L3 ["Layer 3: Asynchronous Media I/O, Two-Tier Caching & Audio Engine"]
+        AsyncLoader["AsyncSourceLoader<br/>(Non-blocking Thread Pool, Progress & Cancel)"]
         ReaderEng["ReaderEngine & Worker Thread Pool<br/>(OpenEXR, DPX, TIFF, PNG, Video)"]
         SeqParser["SequenceParser<br/>(Padding Detection, Missing Frames)"]
-        Cache["RingBufferCache (1–64 GB RAM)<br/>(Off, Play-Ahead, Region, All)"]
+        Cache["Two-Tier Caching System<br/>(RAM RingBufferCache 1–64 GB + Persistent DiskCache)"]
         Audio["AudioEngine (QtMultimedia)<br/>(45ms Drift Resync, 60ms Scrub Bursts)"]
     end
 
     subgraph L4 ["Layer 4: Hardware OpenGL 3.3+ Core & 9-Stage GLSL Color Pipeline"]
         VP["ViewportCanvas (QOpenGLWidget)<br/>(OpenGL Core / Async PBO DMA / Software Safe)"]
         GLSL["9-Stage GLSL Fragment Shader<br/>(Linearization -> EV/Gain -> CDL/3D LUT -> OCIO -> Invert/OOR)"]
+        EXRSheet["EXRContactSheet & EXRMetadata<br/>(Multi-Part / AOV Grid Compositor & Header QC)"]
+        PixelAn["Pixel Analyzer & Color Inspector<br/>(Area Min/Max/Avg/Median, NaN/Inf/Neg, Swatches)"]
         HUDs["12 Dockable Floating HUD Cards<br/>& QPainter Vector Overlays"]
     end
 
@@ -46,41 +52,100 @@ flowchart TB
     IPC --> Main
     Sync <--> Main
     PkgMgr <--> Main
+    FileAssoc --> Main
     Main --> SG
     Main --> Clock
     Main --> Annot
     Main --> Shortcuts
+    Main --> Console
+    Main --> ExportDlg
     Clock --> Audio
     Clock --> ReaderEng
+    Clock --> AsyncLoader
+    AsyncLoader --> ReaderEng
     ReaderEng --> SeqParser
     ReaderEng --> Cache
     Cache --> VP
     VP --> GLSL
+    VP --> EXRSheet
+    VP --> PixelAn
     VP --> HUDs
 ```
 
 ---
 
-## 2. The 9-Stage GLSL Fragment Shader Pipeline (`color/shader_builder.py`)
+## 2. Detailed Breakdown of Architectural Subsystems
 
-![GLSL Color Pipeline](docs/html/assets/diagrams/color_pipeline.svg)
+### 2.1 Layer 1: IPC, Package Management & File Associations
+- **JSON-RPC 2.0 IPC Server (`network/ipc_server.py`):** Binds on `127.0.0.1:45124` to receive automation commands from DCC applications (Nuke, Maya, Houdini, Blender) and command-line scripts.
+- **PackageManager (`packages/manager.py`):** Dynamically discovers and loads modular studio packages from built-in directories, `~/.openreview/packages/`, or `OPENREVIEW_PACKAGE_PATH`.
+- **System File Associations (`core/file_associations.py`):** Registers shell associations for visual effects formats (`.exr`, `.dpx`, `.cin`, `.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`, `.mov`, `.mp4`, `.ovr`) across Windows Registry and Linux XDG MIME systems.
 
-1. **Dual Texture Sampling & Stereo 3D Reconstruction:** Samples `uTextureA` and `uTextureB` (`RGBA16F` / `RGBA32F` / `RGBA8`) and reconstructs Anaglyph, Side-by-Side, or Stereo Difference views with horizontal convergence disparity offset.
-2. **Interactive A/B Wipe & Stack Blending:** Evaluates the angled split wipe plane (`uWipePosition`, `uWipeAngle`) or blends layers via *Over*, *Add*, *Difference* (`|A - B| * uDiffBoost`), or *Inverted Difference* (`1.0 - |A - B| * uDiffBoost`).
-3. **Input Colorspace Linearization:** Converts Cineon/DPX 10-bit Log, ARRI ALEXA LogC, sRGB, Rec.709, or Gamma 2.2 into scene-linear working space (`ACEScg`).
-4. **Scene-Linear Exposure (EV), Gain & Pre-Grade Offset:** Computes `rgb = (rgb * uGain * exp2(uExposureEV)) + uOffset`.
-5. **ASC CDL & Hardware 3D LUT (`GL_TEXTURE_3D`):** Evaluates `pow(clamp(rgb * Slope + Offset, 0.0), Power)` followed by trilinear `.cube` / `.3dl` 3D LUT interpolation.
-6. **Pivot Contrast, Hue Matrix & Rec.709 Luma Saturation:** Applies contrast around an 18% grey pivot (`0.18`), 3x3 hue rotation, and luma-preserving saturation (`Y = 0.2126R + 0.7152G + 0.0722B`).
-7. **OpenColorIO v2 Display View Transform & Gamma:** Applies ACES 1.3 / 2.0 Filmic Tone Map, sRGB, or Rec.709 display transforms and display gamma (`1.0 / uGamma`).
-8. **Display Invert (`Shift+I`) & Out-of-Range Zebra Clipping:** Inverts display RGB (`1.0 - rgb`) when `uInvertColors` is active, and flags super-white (`> 1.0`) pixels in Magenta and negative (`< 0.0`) pixels in Cyan.
-9. **Channel Isolation & Alpha Background Compositing:** Solos `RGB` (`C`), `Red` (`R`), `Green` (`G`), `Blue` (`B`), `Alpha` (`A`), or `Luminance` (`Y`) over Black, 18% Grey, 50% Grey, White, or Checkerboard canvas backgrounds.
+### 2.2 Layer 2: Core Orchestration, Diagnostics & Export Pipeline
+- **MainWindow (`ui/main_window.py`):** Central coordinator integrating docked panels, floating HUD cards, viewport canvas, and top menu hierarchy (organized and sorted ascendingly by category). Includes low-resolution monitor scaling (down to 1920x1080 FHD) and clean Windows taskbar handling in Fullscreen (`F12`) and Presentation (`Ctrl+P`) modes.
+- **SessionGraph (`models/session_graph.py`):** Hierarchical DAG model storing sources, clips, stacks, versions, and multi-view layouts with non-destructive session serialization (`.ovr`).
+- **Live Console Window (`ui/console_dialog.py`):** Intercepts standard log streams, provides severity level filtering (DEBUG, INFO, WARNING, ERROR, CRITICAL), and automatically pops up whenever an unhandled error is logged (`Ctrl+Shift+L`).
+- **Comprehensive Media Export Engine (`ui/export_media_dialog.py`):** Exports single frames, selected in-out ranges, or entire sequences to OpenEXR, QuickTime MOV (ProRes, DNxHD, H.264), DPX, TIFF, and PNG with selectable downrez scaling, colorspace transforms, and burned-in review annotations.
+
+### 2.3 Layer 3: Asynchronous Media I/O & Two-Tier Caching
+- **AsyncSourceLoader (`core/async_source_loader.py`):** Non-blocking background worker that loads heavy multi-part EXR sequences and high-bitrate video containers with cancellation tokens and real-time progress callbacks.
+- **Two-Tier Cache Architecture (`core/cache.py`):**
+  - **Tier 1 (RAM RingBufferCache):** Fast in-memory frame cache with configurable RAM budget (1 GB to 64 GB) and strategy modes: `Off`, `Play-Ahead` (80% forward / 20% backward), `In/Out Region` (`Shift+C`), and `Cache All`.
+  - **Tier 2 (Persistent DiskCache):** Disk-backed frame serialization utilizing fast LZ4/Zstandard compression to cache pre-decoded frames beyond physical RAM boundaries. Includes full cache eviction (`Ctrl+Shift+C`) and global source purge (`Ctrl+Delete`).
+- **Sub-Frame Audio Synchronization (`audio/audio_engine.py`):** Precision clock mapping frame numbers to millisecond audio positions. Automatically initiates hard resync when drift exceeds **45ms**, and produces **60ms audio bursts** during interactive timeline scrubbing.
+
+### 2.4 Layer 4: Hardware OpenGL 3.3+ Viewport & Color Science
+- **The 9-Stage GLSL Fragment Shader (`color/shader_builder.py`):**
+  1. *Dual Texture Sampling & Stereo 3D:* Samples `uTextureA` and `uTextureB` with horizontal disparity offset.
+  2. *Interactive Split Wipe & Blending:* Angled split plane (`W`) with *Replace*, *Over*, *Add*, *Difference*, and *Inverted Difference* modes (`0x–20x` boost).
+  3. *Linearization:* Cineon, LogC, sRGB, Rec.709, or Gamma 2.2 converted to scene-linear (`ACEScg`).
+  4. *Scene-Linear Exposure (EV), Gain & Offset:* `rgb = (rgb * uGain * exp2(uExposureEV)) + uOffset`.
+  5. *ASC CDL & Hardware 3D LUT:* Trilinear interpolation in 3D texture space.
+  6. *Pivot Contrast, Hue Matrix & Saturation:* Contrast pivoted at 18% grey (`0.18`) with Rec.709 luma preservation.
+  7. *OpenColorIO v2 Display Transform:* ACES 1.3/2.0 tone mapping and display gamma.
+  8. *Display Invert & Zebra Warnings:* Instant RGB inversion (`Shift+I`) and Magenta/Cyan out-of-range clipping highlights.
+  9. *Channel Isolation & Background:* Soloing RGB (`C`), R, G, B, Alpha (`A`), or Luma (`Y`) over transparent or solid backdrops.
+- **EXR Multi-Layer Contact Sheet (`core/exr_contact_sheet.py`):** Auto-tiles all AOVs (Diffuse, Specular, Normal, Cryptomatte, Depth) into an interactive contact sheet matrix.
+- **Pixel Analyzer & Area Sampler (`widgets/hud_layers.py`):** Rectangular and point eyedroppers calculating real-time Min, Max, Average, and Median statistics with instant detection of `NaN`, `Inf`, and negative values accompanied by preview swatches.
+- **Anti-Aliased Vector Annotations:** Freehand pen (`D`) with draft stroke feedback that automatically smooths and anti-aliases paths upon release, paired with frame-accurate notes and non-blocking export.
 
 ---
 
-## 3. Sub-Frame Audio Synchronization & Remote Dailies Sync
+## 3. Persistent Configuration Schema (`~/.openreview/preferences.json`)
 
-![Audio Sync & Remote Dailies Topology](docs/html/assets/diagrams/sync_audio_architecture.svg)
+User preferences are persisted as JSON in `~/.openreview/preferences.json`:
 
-- **Audio Drift Compensation (`audio/audio_engine.py`):** Maps frame numbers to millisecond timestamps using `pos_ms = ((frame - start_frame - offset_frames) / fps - offset_seconds) * 1000`. Automatically executes a hard resync if hardware audio clock drift exceeds **45ms**, and generates **60ms audio bursts** during interactive timeline or canvas scrubbing.
-- **Multi-User Remote Dailies Sync (`network/sync_engine.py`):** Host/Client TCP room synchronization (`Ctrl+Shift+D`, default port `9090`) with Presenter lock, Follow mode toggle, live vector stroke broadcasting, color grade mirroring, and room chat.
-- **Persistent Storage (`core/preferences.py`):** Stores user settings, GPU playback engine configuration, OCIO paths, bookmarks, and custom shortcut bindings in `~/.openreview/preferences.json` with `QSettings` fallback.
+```json
+{
+  "playback": {
+    "default_fps": 24.0,
+    "loop_mode": "loop",
+    "real_time": true,
+    "play_every_frame": false,
+    "scrub_audio_bursts": true
+  },
+  "caching": {
+    "strategy": "play_ahead",
+    "ram_budget_gb": 8.0,
+    "disk_cache_enabled": true,
+    "disk_cache_dir": "~/.openreview/cache",
+    "disk_cache_limit_gb": 32.0,
+    "prefetch_forward_ratio": 0.8
+  },
+  "gpu": {
+    "engine": "opengl_core",
+    "use_pbo": true,
+    "texture_format": "RGBA16F"
+  },
+  "color": {
+    "ocio_config_path": "",
+    "default_input_colorspace": "ACEScg",
+    "default_display": "sRGB",
+    "default_view": "ACES 1.0 SDR-video"
+  },
+  "logging": {
+    "log_level": "INFO",
+    "auto_open_console_on_error": true
+  }
+}
+```

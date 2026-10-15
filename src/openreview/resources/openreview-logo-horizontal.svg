@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3200 512" role="img" aria-labelledby="title desc">
+  <title id="title">OpenReview horizontal logo</title>
+  <desc id="desc">OpenReview app icon alongside its chromatic wordmark.</desc>
+  <rect width="3200" height="512" rx="78" fill="#11131B"/>
+  <!-- icon -->
+  <rect x="65" y="80" width="310" height="238" rx="30" fill="#0089D0"/>
+  <rect x="74" y="73" width="310" height="238" rx="30" fill="#CC004C"/>
+  <rect x="70" y="76" width="310" height="238" rx="30" fill="#6460AA"/>
+  <rect x="99" y="110" width="252" height="170" rx="15" fill="#151B2A"/>
+  <g fill="#11131B"><rect x="80" y="96" width="17" height="24" rx="4"/><rect x="80" y="139" width="17" height="24" rx="4"/><rect x="80" y="182" width="17" height="24" rx="4"/><rect x="80" y="225" width="17" height="24" rx="4"/><rect x="80" y="268" width="17" height="24" rx="4"/><rect x="293" y="96" width="17" height="24" rx="4"/><rect x="293" y="139" width="17" height="24" rx="4"/><rect x="293" y="182" width="17" height="24" rx="4"/><rect x="293" y="225" width="17" height="24" rx="4"/><rect x="293" y="268" width="17" height="24" rx="4"/></g>
+  <path d="m134 154 70 40-70 40v-80Z" fill="#FCB711"/>
+  <path d="M228 144c35-16 80-5 89 28 7 23-13 41-39 40-29-1-55-16-50-41Z" fill="none" stroke="#0DB14B" stroke-width="8" stroke-linecap="round" stroke-dasharray="15 9"/>
+  <path d="m245 308 91-91 25 25-91 91-44 13 13-38h6Z" fill="#F37021"/><path d="m336 217 13-13 25 25-13 13-25-25Z" fill="#FCB711"/>
+  <g fill="#F37021"><rect x="47" y="101" width="12" height="12"/><rect x="28" y="130" width="10" height="10"/><rect x="44" y="160" width="15" height="15"/><rect x="27" y="201" width="10" height="10"/><rect x="48" y="248" width="11" height="11"/></g>
+  <path d="M44 380h340" stroke="#3D4860" stroke-width="14" stroke-linecap="round"/><path d="M76 380h188" stroke="#0DB14B" stroke-width="14" stroke-linecap="round"/><path d="m284 354 26 26-26 26v-52Z" fill="#FCB711"/>
+  <!-- wordmark -->
+  <text x="1836" y="392" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="420" font-weight="800" letter-spacing="-25" fill="#0089D0" opacity=".85">OpenReview</text>
+  <text x="1852" y="376" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="420" font-weight="800" letter-spacing="-25" fill="#CC004C" opacity=".9">OpenReview</text>
+  <text x="1844" y="384" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="420" font-weight="800" letter-spacing="-25" fill="#F8FAFC">OpenReview</text>
+</svg>

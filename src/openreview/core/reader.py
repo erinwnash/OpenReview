@@ -142,15 +142,20 @@ class DiskMediaReader(MediaReader):
 
 
 class TaskSignals(QObject):
-    loaded = Signal(int, int, object, str, int)  # timeline_frame, source_frame, data, source_id, generation
+    loaded = Signal(int, int, str, int, bool)  # timeline_frame, source_frame, source_id, generation, success
 
 
 class PrefetchTask(QRunnable):
-    """Thread-safe background prefetch task with token cancellation check."""
+    """
+    Thread-safe background prefetch task.
+    Decodes and stores frames directly into thread-safe RAM cache from worker threads,
+    avoiding main GUI thread queuing and event-loop lag.
+    """
 
     def __init__(
         self,
         reader: Optional[MediaReader],
+        cache,
         timeline_frame: int,
         source_frame: int = -1,
         source_id: str = "",
@@ -159,6 +164,7 @@ class PrefetchTask(QRunnable):
     ):
         super().__init__()
         self.reader = reader
+        self.cache = cache
         self.timeline_frame = timeline_frame
         self.source_frame = source_frame if source_frame >= 0 else timeline_frame
         self.source_id = source_id
@@ -168,44 +174,120 @@ class PrefetchTask(QRunnable):
 
     def run(self) -> None:
         if self.reader is None:
+            self._finish(False)
             return
         if self.is_cancelled_fn and self.is_cancelled_fn():
+            self._finish(False)
             return
-        # Cooperative yield to ensure main GUI thread always gets CPU scheduling priority
-        time.sleep(0.001)
+
+        # Adaptive cooperative yield: guarantee main GUI thread & OpenGL event loop full CPU priority
+        time.sleep(0.002)
+
         try:
             data = self.reader.read_frame(self.source_frame)
             if data is not None:
                 if self.is_cancelled_fn and self.is_cancelled_fn():
+                    self._finish(False)
                     return
 
                 # Convert float32 frames to float16 in background worker thread if in auto/rgba16f mode
-                # This cuts RAM by 50% and accelerates GPU texture upload from 70ms to 15ms
                 try:
                     if isinstance(data, np.ndarray) and data.dtype == np.float32:
                         data = data.astype(np.float16, copy=False)
                 except Exception:
                     pass
 
-                self.signals.loaded.emit(
-                    self.timeline_frame,
-                    self.source_frame,
-                    data,
-                    self.source_id,
-                    self.generation,
-                )
+                # Store directly into thread-safe cache from background thread
+                if self.cache is not None:
+                    if self.source_id:
+                        self.cache.put_source_frame(self.source_id, self.source_frame, data)
+                    else:
+                        self.cache.put_frame(self.timeline_frame, data)
+
+                self._finish(True)
                 return
         except Exception:
             pass
 
-        # Discard pending key if task failed or produced None
+        self._finish(False)
+
+    def _finish(self, success: bool) -> None:
         try:
             self.signals.loaded.emit(
                 self.timeline_frame,
                 self.source_frame,
-                None,
                 self.source_id,
                 self.generation,
+                success,
+            )
+        except Exception:
+            pass
+
+
+class BackgroundDiskCacheTask(QRunnable):
+    """
+    Background worker task that decodes and saves a frame directly to Temp Disk
+    in the background worker thread.
+    Zero disk writing and zero image buffer handling occur on the main GUI thread.
+    """
+
+    def __init__(
+        self,
+        reader: Optional[MediaReader],
+        disk_cache,
+        source_id: str,
+        source_frame: int,
+        generation: int,
+        is_cancelled_fn=None,
+    ):
+        super().__init__()
+        self.reader = reader
+        self.disk_cache = disk_cache
+        self.source_id = source_id
+        self.source_frame = source_frame
+        self.generation = generation
+        self.is_cancelled_fn = is_cancelled_fn
+        self.signals = TaskSignals()
+
+    def run(self) -> None:
+        if self.reader is None or (self.is_cancelled_fn and self.is_cancelled_fn()):
+            self._finish(False)
+            return
+
+        # Friendly cooperative sleep to guarantee UI thread and playback prefetch get full CPU priority
+        time.sleep(0.005)
+
+        try:
+            if self.is_cancelled_fn and self.is_cancelled_fn():
+                self._finish(False)
+                return
+
+            data = self.reader.read_frame(self.source_frame)
+            if data is not None:
+                if self.is_cancelled_fn and self.is_cancelled_fn():
+                    self._finish(False)
+                    return
+
+                # Write directly to Temp Disk in this worker thread!
+                # np.save and atomic os.replace happen HERE, NOT ON MAIN THREAD!
+                if self.disk_cache is not None:
+                    self.disk_cache.put(self.source_id, self.source_frame, data)
+
+                self._finish(True)
+                return
+        except Exception:
+            pass
+
+        self._finish(False)
+
+    def _finish(self, success: bool) -> None:
+        try:
+            self.signals.loaded.emit(
+                -1,
+                self.source_frame,
+                self.source_id,
+                self.generation,
+                success,
             )
         except Exception:
             pass
@@ -220,6 +302,7 @@ class ReaderEngine(QObject):
     """
 
     frame_ready = Signal(int)
+    background_progress = Signal(str, int, int)  # (source_id, cached_count, total_count)
 
     def __init__(self, reader: Optional[MediaReader], cache, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -228,9 +311,12 @@ class ReaderEngine(QObject):
         self.thread_pool = QThreadPool(self)
         self._sync_thread_count()
         self._pending_keys: set[tuple[str, int]] = set()  # (source_id, source_frame)
+        self._bg_pending_keys: set[tuple[str, int]] = set()  # (source_id, source_frame) for background caching
         self._generation = 0
         self._is_paused: bool = False
         self._last_prefetch_params = None
+        self._bg_cache_queue: list[list] = []  # [source_id, reader, start_frame, end_frame, cursor]
+        self._last_bg_progress_time: float = 0.0
         self._prefetch_chain_timer = QTimer(self)
         self._prefetch_chain_timer.setSingleShot(True)
         self._prefetch_chain_timer.setInterval(30)
@@ -246,11 +332,13 @@ class ReaderEngine(QObject):
         try:
             from openreview.core.preferences import PreferencesManager
             prefs = PreferencesManager.instance().prefs
-            default_threads = min(4, max(2, (os.cpu_count() or 4) // 2))
+            total_cores = os.cpu_count() or 4
+            # Adaptive CPU reservation: reserve at least 2 cores for the UI & OpenGL rendering
+            default_threads = max(2, min(total_cores - 2, 6))
             threads = getattr(prefs, "prefetch_worker_threads", default_threads)
             self.thread_pool.setMaxThreadCount(max(2, min(int(threads), 6)))
         except Exception:
-            self.thread_pool.setMaxThreadCount(max(2, min(4, (os.cpu_count() or 4) // 2)))
+            self.thread_pool.setMaxThreadCount(2)
 
     def _on_preferences_changed(self, _prefs=None) -> None:
         self._sync_thread_count()
@@ -271,11 +359,13 @@ class ReaderEngine(QObject):
     def resume_prefetch(self) -> None:
         """Resume prefetching after scrubbing or dragging stops."""
         self._is_paused = False
+        self._schedule_next_background_cache_task()
 
     def cancel_pending(self) -> None:
         """Invalidate all pending in-flight background prefetch jobs."""
         self._generation += 1
         self._pending_keys.clear()
+        self._bg_pending_keys.clear()
         if hasattr(self, "_prefetch_chain_timer"):
             self._prefetch_chain_timer.stop()
 
@@ -380,6 +470,7 @@ class ReaderEngine(QObject):
 
                 task = PrefetchTask(
                     reader=rdr,
+                    cache=self.cache,
                     timeline_frame=tf,
                     source_frame=src_frame,
                     source_id=sid_str,
@@ -393,31 +484,153 @@ class ReaderEngine(QObject):
         self,
         timeline_frame: int,
         source_frame: int,
-        data: np.ndarray,
-        source_id: str,
-        generation: int,
+        *args,
+        **kwargs,
     ) -> None:
+        # Flexible argument extraction supporting new lightweight signal and legacy/test signatures
+        if len(args) >= 1 and isinstance(args[0], (np.ndarray, type(None))):
+            data = args[0]
+            source_id = args[1] if len(args) > 1 else kwargs.get("source_id", "")
+            generation = args[2] if len(args) > 2 else kwargs.get("generation", 0)
+            success = (data is not None)
+        else:
+            source_id = args[0] if len(args) > 0 else kwargs.get("source_id", "")
+            generation = args[1] if len(args) > 1 else kwargs.get("generation", 0)
+            success = args[2] if len(args) > 2 else kwargs.get("success", True)
+            data = kwargs.get("data", None)
+
         key = (source_id, source_frame)
         self._pending_keys.discard(key)
 
-        if self._is_paused or data is None or generation < self._generation:
+        if self._is_paused or generation < self._generation:
             return
 
-        if source_id:
-            self.cache.put_source_frame(source_id, source_frame, data)
-        else:
-            self.cache.put_frame(timeline_frame, data)
+        # Direct insertion fallback if data was passed explicitly (e.g. from tests)
+        if data is not None and self.cache is not None:
+            if source_id:
+                self.cache.put_source_frame(source_id, source_frame, data)
+            else:
+                self.cache.put_frame(timeline_frame, data)
 
-        self.frame_ready.emit(timeline_frame)
+        if success:
+            self.frame_ready.emit(timeline_frame)
 
         # Smooth cooperative chaining of next batch when worker queue has breathing room
-        if not self._is_paused and len(self._pending_keys) <= 2 and self._last_prefetch_params:
-            if hasattr(self, "_prefetch_chain_timer") and not self._prefetch_chain_timer.isActive():
+        if not self._is_paused and len(self._pending_keys) <= 2:
+            if self._last_prefetch_params and hasattr(self, "_prefetch_chain_timer") and not self._prefetch_chain_timer.isActive():
                 self._prefetch_chain_timer.start(30)
+            elif len(self._pending_keys) == 0:
+                self._schedule_next_background_cache_task()
 
     def _prefetch_next_batch(self) -> None:
-        if not self._is_paused and self._last_prefetch_params:
-            self.request_prefetch(*self._last_prefetch_params)
+        if not self._is_paused:
+            if self._last_prefetch_params:
+                self.request_prefetch(*self._last_prefetch_params)
+            if len(self._pending_keys) == 0:
+                self._schedule_next_background_cache_task()
+
+    def queue_source_background_cache(
+        self,
+        source_id: str,
+        reader: MediaReader,
+        start_frame: int,
+        end_frame: int,
+    ) -> None:
+        """Queue a source sequence to be cached in the background onto Temp Disk at idle priority."""
+        if not source_id or not reader:
+            return
+        self._bg_cache_queue.append([source_id, reader, start_frame, end_frame, start_frame])
+        self._schedule_next_background_cache_task()
+
+    def clear_background_cache_queue(self) -> None:
+        """Clear all queued secondary background caching jobs."""
+        self._bg_cache_queue.clear()
+        self._bg_pending_keys.clear()
+
+    def _schedule_next_background_cache_task(self) -> None:
+        # If prefetch is paused, or if interactive playback prefetch is active, yield CPU to UI
+        if self._is_paused or len(self._pending_keys) > 0:
+            return
+        if len(self._bg_pending_keys) >= 2:
+            return
+        if not self._bg_cache_queue:
+            return
+
+        disk_cache = getattr(self.cache, "disk_cache", None)
+        if disk_cache is None or not getattr(self.cache, "_disk_cache_enabled", True):
+            return
+
+        while self._bg_cache_queue:
+            item = self._bg_cache_queue[0]
+            src_id, rdr, s_frame, e_frame, cursor = item[0], item[1], item[2], item[3], item[4]
+            uncached_frame = None
+
+            curr_f = cursor
+            while curr_f <= e_frame:
+                key = (src_id, curr_f)
+                if key not in self._bg_pending_keys and not self.cache.has_source_frame(src_id, curr_f):
+                    uncached_frame = curr_f
+                    item[4] = curr_f + 1
+                    break
+                curr_f += 1
+
+            if uncached_frame is None:
+                # Sequence completed!
+                self._bg_cache_queue.pop(0)
+                total_span = max(1, e_frame - s_frame + 1)
+                self.background_progress.emit(src_id, total_span, total_span)
+                continue
+
+            self._bg_pending_keys.add((src_id, uncached_frame))
+            curr_gen = self._generation
+
+            task = BackgroundDiskCacheTask(
+                reader=rdr,
+                disk_cache=disk_cache,
+                source_id=src_id,
+                source_frame=uncached_frame,
+                generation=curr_gen,
+                is_cancelled_fn=lambda g=curr_gen: g < self._generation or self._is_paused or len(self._pending_keys) > 0,
+            )
+            task.signals.loaded.connect(self._on_background_frame_loaded)
+            self.thread_pool.start(task, priority=0)
+            break
+
+    def _on_background_frame_loaded(
+        self,
+        timeline_frame: int,
+        source_frame: int,
+        *args,
+        **kwargs,
+    ) -> None:
+        if len(args) >= 1 and isinstance(args[0], (np.ndarray, type(None))):
+            source_id = args[1] if len(args) > 1 else kwargs.get("source_id", "")
+            generation = args[2] if len(args) > 2 else kwargs.get("generation", 0)
+        else:
+            source_id = args[0] if len(args) > 0 else kwargs.get("source_id", "")
+            generation = args[1] if len(args) > 1 else kwargs.get("generation", 0)
+
+        key = (source_id, source_frame)
+        self._bg_pending_keys.discard(key)
+        if self._is_paused or generation < self._generation:
+            return
+
+        # Notify timeline / UI of cache updates (coalesced by UI timer)
+        if hasattr(self.cache, "_emit_status"):
+            self.cache._emit_status()
+
+        # Throttled status updates (at most once every 200ms) to prevent UI thread flooding
+        now = time.time()
+        if self._bg_cache_queue and (now - self._last_bg_progress_time > 0.2):
+            self._last_bg_progress_time = now
+            cur_sid, _, s_f, e_f, _ = self._bg_cache_queue[0]
+            if cur_sid == source_id:
+                total_span = max(1, e_f - s_f + 1)
+                cached_count = self.cache.get_source_disk_cached_count(source_id) if hasattr(self.cache, "get_source_disk_cached_count") else 0
+                self.background_progress.emit(source_id, cached_count, total_span)
+
+        if not self._is_paused and len(self._pending_keys) == 0 and len(self._bg_pending_keys) < 2:
+            self._schedule_next_background_cache_task()
 
 
 class CallableVirtualReader(MediaReader):

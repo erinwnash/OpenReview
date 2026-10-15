@@ -146,7 +146,7 @@ class AnnotationManagerWidget(QWidget):
         # Header Info Banner
         header_layout = QHBoxLayout()
         title_box = QVBoxLayout()
-        self.lbl_title = QLabel("✏ Annotation & Markup Manager", self)
+        self.lbl_title = QLabel("Annotation & Markup Manager", self)
         font = QFont()
         font.setPointSize(13)
         font.setBold(True)
@@ -160,7 +160,10 @@ class AnnotationManagerWidget(QWidget):
         header_layout.addLayout(title_box)
         header_layout.addStretch()
 
-        self.btn_refresh = QPushButton("🔄 Refresh", self)
+        from openreview.resources import get_vfx_icon
+
+        self.btn_refresh = QPushButton("Refresh", self)
+        self.btn_refresh.setIcon(get_vfx_icon("refresh"))
         self.btn_refresh.clicked.connect(self.refresh_table)
         header_layout.addWidget(self.btn_refresh)
         main_layout.addLayout(header_layout)
@@ -195,7 +198,8 @@ class AnnotationManagerWidget(QWidget):
         note_header.addWidget(self.lbl_selected_frame)
         note_header.addStretch()
 
-        self.btn_save_note = QPushButton("💾 Update Note", bottom_widget)
+        self.btn_save_note = QPushButton("Update Note", bottom_widget)
+        self.btn_save_note.setIcon(get_vfx_icon("save"))
         self.btn_save_note.clicked.connect(self._on_save_current_note)
         note_header.addWidget(self.btn_save_note)
         bottom_layout.addLayout(note_header)
@@ -213,18 +217,20 @@ class AnnotationManagerWidget(QWidget):
         btn_bar = QHBoxLayout()
         btn_bar.setSpacing(8)
 
-        self.btn_jump = QPushButton("▶ Jump to Frame", self)
+        self.btn_jump = QPushButton("Jump to Frame", self)
         self.btn_jump.setToolTip("Seek timeline to selected annotated frame")
         self.btn_jump.clicked.connect(self._on_jump_clicked)
         btn_bar.addWidget(self.btn_jump)
 
-        self.btn_clear_frame = QPushButton("🗑 Clear Frame", self)
+        self.btn_clear_frame = QPushButton("Clear Frame", self)
+        self.btn_clear_frame.setIcon(get_vfx_icon("delete"))
         self.btn_clear_frame.setObjectName("danger_btn")
         self.btn_clear_frame.setToolTip("Clear annotations on the selected frame")
         self.btn_clear_frame.clicked.connect(self._on_clear_selected_frame)
         btn_bar.addWidget(self.btn_clear_frame)
 
-        self.btn_clear_all = QPushButton("🗑 Clear All...", self)
+        self.btn_clear_all = QPushButton("Clear All...", self)
+        self.btn_clear_all.setIcon(get_vfx_icon("delete"))
         self.btn_clear_all.setObjectName("danger_btn")
         self.btn_clear_all.setToolTip("Purge all annotations across the entire clip")
         self.btn_clear_all.clicked.connect(self._on_clear_all_clicked)
@@ -232,12 +238,14 @@ class AnnotationManagerWidget(QWidget):
 
         btn_bar.addStretch()
 
-        self.btn_export = QPushButton("📤 Export...", self)
+        self.btn_export = QPushButton("Export...", self)
+        self.btn_export.setIcon(get_vfx_icon("export"))
         self.btn_export.setToolTip("Export annotations to JSON, Report, or Burned-in Images")
         self.btn_export.clicked.connect(self._on_export_clicked)
         btn_bar.addWidget(self.btn_export)
 
-        self.btn_import = QPushButton("📥 Import...", self)
+        self.btn_import = QPushButton("Import...", self)
+        self.btn_import.setIcon(get_vfx_icon("import"))
         self.btn_import.setToolTip("Import vector annotations from JSON")
         self.btn_import.clicked.connect(self._on_import_clicked)
         btn_bar.addWidget(self.btn_import)

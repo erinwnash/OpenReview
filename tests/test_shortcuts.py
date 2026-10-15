@@ -133,3 +133,49 @@ def test_invert_and_close_session_shortcuts(qapp):
     assert mgr.eventFilter(None, ev_close) is True
     assert triggered == ["invert", "close"]
 
+
+def test_keypad_modifier_shortcut_handling(qapp):
+    mgr = ShortcutManager.instance()
+    triggered = []
+    mgr.bind_callback("session.close", lambda: triggered.append("close"))
+
+    # Event simulating KeypadModifier attached (e.g. from numlock/keypad or certain keyboards)
+    ev_keypad = QKeyEvent(
+        QEvent.Type.KeyPress,
+        Qt.Key.Key_N,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.KeypadModifier,
+        "N",
+    )
+    # Must not raise TypeError: QKeyCombination.__init__(KeyboardModifier, int)
+    assert mgr.eventFilter(None, ev_keypad) is True
+    assert "close" in triggered
+
+
+def test_shift_c_toggle_cache_starts_and_stops(qtbot):
+    from openreview.ui.main_window import MainWindow
+    from openreview.core.cache import CacheMode
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    # Initially Cache is OFF and reader engine is paused
+    assert win.cache.mode == CacheMode.OFF
+    assert win._cache_started is False
+    assert win.reader_engine.is_paused is True
+
+    # 1. First Shift+C press: starts Region caching, unpauses reader engine, syncs timeline combo
+    win._on_toggle_cache()
+    assert win.cache.mode == CacheMode.REGION
+    assert win._cache_started is True
+    assert win.reader_engine.is_paused is False
+    assert win.timeline.combo_cache_mode.currentData() == "region"
+
+    # 2. Second Shift+C press: turns Cache OFF and pauses reader engine
+    win._on_toggle_cache()
+    assert win.cache.mode == CacheMode.OFF
+    assert win._cache_started is False
+    assert win.reader_engine.is_paused is True
+    assert win.timeline.combo_cache_mode.currentData() == "off"
+
+    win.close()
+

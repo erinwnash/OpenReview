@@ -1,7 +1,7 @@
 # OpenReview 🎬
 
 <p align="center">
-  <img src="openreview-logo-minimal.svg" alt="OpenReview Logo" width="360" />
+  <img src="openreview-logo-horizontal.svg" alt="OpenReview Logo" width="480" />
 </p>
 
 <p align="center">
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/maruthuvfx/OpenReview/releases/latest"><img src="https://img.shields.io/badge/Release-v1.0.0-007acc?style=flat-square&logo=github" alt="Release v1.0.0" /></a>
+  <a href="https://github.com/maruthuvfx/OpenReview/releases/latest"><img src="https://img.shields.io/badge/Release-v1.0.1-007acc?style=flat-square&logo=github" alt="Release v1.0.1" /></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT" /></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=flat-square&logo=python" alt="Python 3.10+" /></a>
   <a href="https://www.qt.io/"><img src="https://img.shields.io/badge/GUI-PySide6%20%7C%20Qt6-green.svg?style=flat-square&logo=qt" alt="PySide6 / Qt6" /></a>
@@ -31,26 +31,29 @@
 
 ## 📦 Binary Downloads & Distribution Matrix
 
-Pre-built standalone distributions for **OpenReview v1.0.0** are hosted directly on **[GitHub Releases](https://github.com/maruthuvfx/OpenReview/releases/tag/v1.0.0)**.
+Pre-built standalone distributions for **OpenReview v1.0.1** are hosted directly on **[GitHub Releases](https://github.com/maruthuvfx/OpenReview/releases/tag/v1.0.1)**.
 
 | Platform / Edition | Package Format | Target Architecture | Description | Download |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows 64-bit** | `.msi` Installer | `x86_64` (Win 10/11) | Full interactive Windows installer with Start Menu shortcut, desktop icon, and file associations. | [**Download .msi**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.0/OpenReview-1.0.0-win64.msi) |
-| **Windows 64-bit Portable** | `.zip` Archive | `x86_64` (Win 10/11) | Zero-install standalone directory. Unzip anywhere and double-click `OpenReview.exe` to run. | [**Download .zip**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.0/OpenReview-1.0.0-win64-portable.zip) |
-| **Linux (Debian / Ubuntu)** | `.deb` Package | `amd64` (Ubuntu 20.04+, Debian 11+) | Native Debian package installing desktop integration, `/opt/openreview`, and terminal launcher. | [**Download .deb**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.0/openreview_1.0.0_amd64.deb) |
-| **Linux (RHEL / Fedora)** | `.rpm` Package | `x86_64` (RHEL 8/9, Rocky, Fedora) | Standard RedHat package with system desktop entry, MIME types, and icon deployment. | [**Download .rpm**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.0/openreview-1.0.0-1.x86_64.rpm) |
+| **Windows 64-bit** | `.msi` Installer | `x86_64` (Win 10/11) | Full interactive Windows installer with Start Menu shortcut, desktop icon, and file associations. | [**Download .msi**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.1/OpenReview-1.0.1-win64.msi) |
+| **Windows 64-bit Portable** | `.zip` Archive | `x86_64` (Win 10/11) | Zero-install standalone directory. Unzip anywhere and double-click `OpenReview.exe` to run. | [**Download .zip**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.1/OpenReview-1.0.1-win64-portable.zip) |
+| **Linux (Debian / Ubuntu)** | `.deb` Package | `amd64` (Ubuntu 20.04+, Debian 11+) | Native Debian package installing desktop integration, `/opt/openreview`, and terminal launcher. | [**Download .deb**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.1/openreview_1.0.1_amd64.deb) |
+| **Linux (RHEL / Fedora)** | `.rpm` Package | `x86_64` (RHEL 8/9, Rocky, Fedora) | Standard RedHat package with system desktop entry, MIME types, and icon deployment. | [**Download .rpm**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.1/openreview-1.0.1-1.x86_64.rpm) |
 | **Python Source** | PyPI / Editable | Cross-platform | Run directly from source in any Python 3.10+ virtual environment. | `pip install -e .` |
 
 ---
 
 ## 🚀 Key Studio Capabilities
 
-- **Hardware-Accelerated OpenGL 3.3+ Viewport**: Double-buffered Asynchronous Pixel Buffer Object (PBO) DMA texture streaming, native `RGBA16F` / `RGBA32F` floating-point textures, sub-pixel bilinear and nearest filtering, and multi-threaded disk prefetching via `RingBufferCache`.
+- **Hardware-Accelerated OpenGL 3.3+ Viewport**: Double-buffered Asynchronous Pixel Buffer Object (PBO) DMA texture streaming, native `RGBA16F` / `RGBA32F` floating-point textures, sub-pixel bilinear and nearest filtering, and two-tier RAM (`RingBufferCache`) + persistent `DiskCache` prefetching.
+- **Async Source Loader**: Multi-threaded non-blocking loader for massive multi-part OpenEXR sequences and high-bitrate video containers with real-time progress and cancellation tokens.
 - **9-Stage GLSL Color Pipeline**: Seamless OpenColorIO v2 (ACES 1.3 / 2.0, ACEScg, ARRI LogC, Cineon, Rec.709, sRGB), F-stop Exposure ($2^{\text{EV}}$), Gain, Offset, Gamma, 18% Midpoint Pivot Contrast, Hue rotation, Saturation, hardware 3D LUTs (`.cube`, `.3dl`), ASC CDL (`.cdl`, `.cc`, `.ccc`), Invert (`Shift+I`), and Out-of-Range zebra warnings.
 - **Angled A/B Split Wipes & Difference QC**: Multi-angle split wipe controller (`W`), Difference & Inverted Difference modes with interactive multiplier boost for plate-to-comp alignment and grain inspection.
-- **Multi-Source Stacking & Contact Sheet Layouts**: Layer stacking (`Z` / `Shift+Z`) with blend modes (Over, Add, Multiply, Screen), plus automatic multi-tile contact sheets (`Auto Grid`, `Side-by-Side`, `Over/Under`, `2x2`, `3x3`).
-- **32-Bit Float Pixel Probe & Area Samplers**: Real-time cursor pixel readout (`RGBA` + Luminance) with pinned point and rectangular area samplers (`F5`), min/max/mean statistical readouts, and instant `NaN` / `Inf` / Negative pixel detection.
-- **Vector Markup & Frame Annotations**: Freehand pen (`D`), line, arrow, rectangle, circle, and in-canvas text callouts (`X`) with per-frame Undo/Redo and multi-format media export (`Ctrl+Shift+E`).
+- **Multi-Source Stacking & EXR Contact Sheet Layouts**: Layer stacking (`Z` / `Shift+Z`) with blend modes (Over, Add, Multiply, Screen), automatic multi-tile contact sheets (`Auto Grid`, `Side-by-Side`, `Over/Under`, `2x2`, `3x3`), and automated EXR AOV multi-pass contact sheets.
+- **32-Bit Float Pixel Probe & Area Pixel Analyzer**: Real-time cursor pixel readout (`RGBA` + Luminance) with pinned point and rectangular area samplers (`F5`), Min/Max/Avg/Median statistics, preview swatches, and instant `NaN` / `Inf` / Negative pixel detection.
+- **Vector Markup & Frame Annotations**: Freehand pen (`D`) with draft stroke drawing and auto-smoothing / anti-aliasing upon release, geometric callouts (`X`), frame-accurate notes, and non-blocking export (`Ctrl+Shift+E`) in true viewer colorspace.
+- **Multi-Format Studio Media Export**: Rewritten exporter for OpenEXR, QuickTime MOV (ProRes, DNxHD, H.264), DPX, TIFF, and PNG with resolution downrez scaling and colorspace conversion.
+- **Diagnostics & Live Console Window**: Dedicated embedded log console (`Ctrl+Shift+L`) with severity filtering and automatic popup on error events.
 - **Multi-User Remote Dailies Sync**: TCP multi-client synchronized playback (`Ctrl+Shift+D`), scrubbing, frame jumping, and annotation sync for studio review rooms.
 - **Sub-Frame Audio Engine**: 60ms scrubbing audio bursts, 45ms drift auto-resynchronization, and seconds + frames offset calibration.
 
@@ -101,7 +104,8 @@ Pre-built standalone distributions for **OpenReview v1.0.0** are hosted directly
 | **Playback** | JKL Variable Shuttling | `J` (Reverse) / `K` (Stop) / `L` (Forward) | `Shift+L` (Fast Forward) |
 | **Playback** | Frame Step / 10-Frame Step | `Left` / `Right` | `Shift+Left` / `Shift+Right` |
 | **Playback** | Jump to First / Last Frame | `Home` / `End` | `Ctrl+G` (Go to Frame) |
-| **Channels** | View Channel | `C` (RGB) / `R` / `G` / `B` / `A` (Alpha) | `Y` (Luminance) |
+| **Playback** | Cache In/Out Region | `Shift+C` | |
+| **Channels** | View Channel | `C` (RGB) / `R` / `G` / `B` / `A` (Alpha) | `Y` (Rec.709 Luminance) |
 | **Color** | Exposure Up / Down (±0.25 EV) | `Alt++` / `Alt+-` | `E` / `Ctrl+Alt+E` (Reset) |
 | **Color** | Gain Up / Down (±0.10) | `+` / `-` | `Shift+Home` (Reset All) |
 | **Color** | Gamma Up / Down (±0.05) | `Shift++` / `Shift+-` | `Ctrl+Alt+G` (Reset Gamma) |
@@ -118,12 +122,15 @@ Pre-built standalone distributions for **OpenReview v1.0.0** are hosted directly
 | **Stacks** | Cycle Stack Layer (Prev / Next) | `Z` / `Shift+Z` | `Alt+Up` / `Alt+Down` (Version) |
 | **HUDs** | Toggle Sources Bin / File Browser | `` ` `` (Backtick) | `Ctrl+B` |
 | **HUDs** | A/B Split Wipe Toggle / Wipe Angle | `W` | `Shift+W` (Flip Orientation) |
-| **HUDs** | Color Inspector / Pixel Probe | `F5` | `Alt+C` |
+| **HUDs** | Color Inspector & Area Analyzer | `F5` | `Alt+C` |
 | **HUDs** | Histogram / Source Details | `H` | `I` |
 | **HUDs** | Remote Dailies Sync Room | `Ctrl+Shift+D` | |
+| **HUDs** | Live Diagnostics Console | `Ctrl+Shift+L` | |
 | **Markup** | Annotation Toolbar / Pen Tool | `X` | `D` |
 | **Markup** | Undo / Redo Annotation Stroke | `Ctrl+Z` | `Ctrl+Shift+Z` (`Ctrl+Y`) |
-| **Export** | Export Frame / Sequence / Annotations | `Ctrl+Shift+E` | |
+| **Sessions** | Close & Clear Session | `Ctrl+Shift+N` | `Ctrl+N` (New Session) |
+| **Export** | Comprehensive Media Exporter | `Ctrl+Shift+E` | |
+| **Cache** | Clear RAM Cache / Clear All Sources Cache | `Ctrl+Shift+C` | `Ctrl+Delete` |
 
 ---
 

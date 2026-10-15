@@ -541,7 +541,9 @@ class TopControlBar(QFrame):
             self._chan_buttons[m] = b
 
         # Keep dummy audio button reference for backwards compatibility
-        self.btn_audio = QPushButton("🔊", self)
+        from openreview.resources import get_vfx_icon
+        self.btn_audio = QPushButton(self)
+        self.btn_audio.setIcon(get_vfx_icon("volume"))
         self.btn_audio.hide()
 
         layout.addSpacing(6)
@@ -971,6 +973,14 @@ class TopControlBar(QFrame):
         else:
             self.layer_combo.setCurrentIndex(0)
         self.layer_combo.blockSignals(False)
+
+    def set_current_layer(self, layer_name: str) -> None:
+        """Select active layer in layer_combo dropdown without re-triggering signal loop."""
+        idx = self.layer_combo.findData(layer_name)
+        if idx >= 0:
+            self.layer_combo.blockSignals(True)
+            self.layer_combo.setCurrentIndex(idx)
+            self.layer_combo.blockSignals(False)
 
     def _on_stereo_combo_changed(self, index: int) -> None:
         mode = self.stereo_combo.currentData()

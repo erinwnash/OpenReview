@@ -63,6 +63,8 @@ class TimelineRuler(QWidget):
         self.clock.bookmarks_changed.connect(lambda _: self._invalidate_bg_cache())
         self.zoom_factor: float = 1.0
         self._cached_frames: Set[int] = set()
+        self._ram_cached_frames: Set[int] = set()
+        self._disk_cached_frames: Set[int] = set()
 
         if self.annotation_store:
             self.annotation_store.annotations_changed.connect(lambda _: self._invalidate_bg_cache())
@@ -76,9 +78,18 @@ class TimelineRuler(QWidget):
         self._bg_cache = None
         super().resizeEvent(event)
 
-    def set_cached_frames(self, frames: Set[int]) -> None:
-        """Update cached frame set and repaint timeline indicator."""
-        self._cached_frames = set(frames)
+    def set_cached_frames(self, frames: Set[int], disk_frames: Optional[Set[int]] = None) -> None:
+        """Update cached frame sets (RAM and Temp Disk) and repaint timeline indicator."""
+        self._ram_cached_frames = set(frames)
+        if disk_frames is not None:
+            self._disk_cached_frames = set(disk_frames)
+        self._cached_frames = self._ram_cached_frames | self._disk_cached_frames
+        self._invalidate_bg_cache()
+
+    def set_disk_cached_frames(self, disk_frames: Set[int]) -> None:
+        """Update temp disk cached frame set and repaint timeline indicator."""
+        self._disk_cached_frames = set(disk_frames)
+        self._cached_frames = self._ram_cached_frames | self._disk_cached_frames
         self._invalidate_bg_cache()
 
     def set_zoom_factor(self, factor: float) -> None:
@@ -341,20 +352,48 @@ class TimelineRuler(QWidget):
                     p.drawPolygon(diamond)
                     p.drawLine(int(bx), 12, int(bx), 16)
 
-            # Cached Frames Indicator (Vibrant Green Stripe #2ecc71)
-            if self._cached_frames:
-                visible_cached = sorted(f for f in self._cached_frames if start <= f <= end)
-                if visible_cached:
+            # Dual-Color Cached Frames Indicator
+            # 1. Temp Drive Disk Frames (Amber/Orange: #e67e22)
+            disk_only_frames = self._disk_cached_frames - self._ram_cached_frames
+            if disk_only_frames:
+                visible_disk = sorted(f for f in disk_only_frames if start <= f <= end)
+                if visible_disk:
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(QColor(230, 126, 34, 230))
+                    v_start, v_end = self._get_visible_range()
+                    v_span = max(1.0, v_end - v_start)
+                    fw = max(1.5, (w - 24.0) / v_span)
+                    spans = []
+                    current_start = visible_disk[0]
+                    prev_frame = current_start
+                    for f in visible_disk[1:]:
+                        if f == prev_frame + 1:
+                            prev_frame = f
+                        else:
+                            spans.append((current_start, prev_frame))
+                            current_start = f
+                            prev_frame = f
+                    spans.append((current_start, prev_frame))
+
+                    for span_start, span_end in spans:
+                        x1 = self._frame_to_x(span_start) - fw / 2.0
+                        x2 = self._frame_to_x(span_end) + fw / 2.0
+                        p.fillRect(QRectF(x1, h - 5, max(fw, x2 - x1), 3), QColor(230, 126, 34, 230))
+
+            # 2. Tier-1 RAM Frames (Emerald Green: #2ecc71)
+            ram_frames = self._ram_cached_frames if self._ram_cached_frames else (self._cached_frames if not self._disk_cached_frames else set())
+            if ram_frames:
+                visible_ram = sorted(f for f in ram_frames if start <= f <= end)
+                if visible_ram:
                     p.setPen(Qt.PenStyle.NoPen)
                     p.setBrush(QColor(46, 204, 113, 230))
                     v_start, v_end = self._get_visible_range()
                     v_span = max(1.0, v_end - v_start)
                     fw = max(1.5, (w - 24.0) / v_span)
-
                     spans = []
-                    current_start = visible_cached[0]
+                    current_start = visible_ram[0]
                     prev_frame = current_start
-                    for f in visible_cached[1:]:
+                    for f in visible_ram[1:]:
                         if f == prev_frame + 1:
                             prev_frame = f
                         else:
@@ -406,24 +445,36 @@ class CompactCacheBar(QWidget):
         super().__init__(parent)
         self.clock = clock
         self._cached_frames: Set[int] = set()
+        self._disk_cached_frames: Set[int] = set()
         self._percent_used = 0.0
+        self._disk_percent_used = 0.0
         self._cache_mode = "off"
         self.setFixedSize(130, 18)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("RAM Cache: OFF (Click or use Cache menu to enable)")
 
-    def update_cache_data(self, cached_frames: Set[int], pct_used: float, cache_mode: str = "off") -> None:
+    def update_cache_data(
+        self,
+        cached_frames: Set[int],
+        pct_used: float,
+        cache_mode: str = "off",
+        disk_cached_frames: Optional[Set[int]] = None,
+        disk_pct_used: float = 0.0,
+    ) -> None:
         self._cached_frames = cached_frames
+        self._disk_cached_frames = set(disk_cached_frames) if disk_cached_frames is not None else set()
         self._percent_used = pct_used
+        self._disk_percent_used = disk_pct_used
         self._cache_mode = cache_mode
+        disk_str = f", Temp Disk: {int(disk_pct_used)}%" if disk_pct_used > 0 else ""
         if cache_mode == "off":
             self.setToolTip("RAM Cache: OFF (Click to toggle Play-Ahead / Region Cache)")
         elif cache_mode == "region":
-            self.setToolTip(f"RAM Cache: In/Out Region Only ({int(pct_used)}% RAM) - Click to toggle")
+            self.setToolTip(f"Cache: In/Out Region ({int(pct_used)}% RAM{disk_str}) - Click to toggle")
         elif cache_mode == "play_ahead":
-            self.setToolTip(f"RAM Cache: Play-Ahead Lookahead ({int(pct_used)}% RAM) - Click to toggle")
+            self.setToolTip(f"Cache: Play-Ahead ({int(pct_used)}% RAM{disk_str}) - Click to toggle")
         else:
-            self.setToolTip(f"RAM Cache: Full Sequence ({int(pct_used)}% RAM) - Click to toggle")
+            self.setToolTip(f"Cache: Full Sequence ({int(pct_used)}% RAM{disk_str}) - Click to toggle")
         self.update()
 
     def mousePressEvent(self, event) -> None:
@@ -458,12 +509,23 @@ class CompactCacheBar(QWidget):
         end = self.clock.end_frame
         span = max(1, end - start + 1)
 
+        inner_w = w - 4
+
+        # 1. Draw Temp Disk cached frames (Amber)
+        if self._disk_cached_frames:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(230, 126, 34, 200))
+            for f in self._disk_cached_frames:
+                if start <= f <= end:
+                    x = 2 + int(((f - start) / float(span)) * inner_w)
+                    seg_w = max(1, int(inner_w / float(span)) + 1)
+                    painter.fillRect(x, 2, seg_w, h - 4, QColor(230, 126, 34, 200))
+
+        # 2. Draw RAM cached frames (Emerald Green)
         painter.setPen(Qt.PenStyle.NoPen)
-        # In Region mode, use a slightly warmer emerald green or vibrant cyan
         seg_color = QColor(46, 204, 113, 220) if self._cache_mode != "region" else QColor(39, 174, 96, 230)
         painter.setBrush(seg_color)
 
-        inner_w = w - 4
         for f in self._cached_frames:
             if start <= f <= end:
                 x = 2 + int(((f - start) / float(span)) * inner_w)
@@ -765,7 +827,7 @@ class TimelineWidget(QFrame):
         # Divider
         transport_row.addSpacing(6)
 
-        # Cache Mode Dropdown (Defaults to In/Out Region)
+        # Cache Mode Dropdown (Defaults to Cache: OFF)
         self.combo_cache_mode = QComboBox(self)
         self.combo_cache_mode.setToolTip("RAM Cache Mode")
         self.combo_cache_mode.setMinimumWidth(105)
@@ -774,7 +836,7 @@ class TimelineWidget(QFrame):
         self.combo_cache_mode.addItem("Play-Ahead", "play_ahead")
         self.combo_cache_mode.addItem("In/Out Region", "region")
         self.combo_cache_mode.addItem("Full Sequence", "all")
-        self.combo_cache_mode.setCurrentIndex(2)  # Default to In/Out Region
+        self.combo_cache_mode.setCurrentIndex(0)  # Default to Cache: OFF
         self.combo_cache_mode.currentIndexChanged.connect(self._on_cache_combo_changed)
         transport_row.addWidget(self.combo_cache_mode)
 
@@ -1099,15 +1161,28 @@ class TimelineWidget(QFrame):
             self.combo_handles.lineEdit().clearFocus()
         self._return_focus_to_viewport()
 
-    def update_cache_display(self, cached_frames: Set[int], pct_used: float, cache_mode: str = "off") -> None:
+    def update_cache_display(
+        self,
+        cached_frames: Set[int],
+        pct_used: float,
+        cache_mode: str = "off",
+        disk_cached_frames: Optional[Set[int]] = None,
+        disk_pct_used: float = 0.0,
+    ) -> None:
         mode_idx_map = {"off": 0, "play_ahead": 1, "region": 2, "all": 3}
         idx = mode_idx_map.get(cache_mode, 0)
         if hasattr(self, "combo_cache_mode") and self.combo_cache_mode.currentIndex() != idx:
             self.combo_cache_mode.blockSignals(True)
             self.combo_cache_mode.setCurrentIndex(idx)
             self.combo_cache_mode.blockSignals(False)
-        self.cache_bar.update_cache_data(cached_frames, pct_used, cache_mode)
-        self.ruler.set_cached_frames(cached_frames)
+        self.cache_bar.update_cache_data(
+            cached_frames,
+            pct_used,
+            cache_mode,
+            disk_cached_frames=disk_cached_frames,
+            disk_pct_used=disk_pct_used,
+        )
+        self.ruler.set_cached_frames(cached_frames, disk_frames=disk_cached_frames)
 
     def zoom_in(self) -> None:
         """Magnify timeline ruler around playhead."""

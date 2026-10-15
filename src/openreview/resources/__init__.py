@@ -25,10 +25,9 @@ ICONS_DIR = RESOURCES_DIR / "icons" if (RESOURCES_DIR / "icons").exists() else R
 def get_app_icon_path() -> Path:
     """Return the absolute path to the primary application icon."""
     for root in (PROJECT_ROOT, RESOURCES_DIR, RESOURCES_DIR.parent):
-        for name in ("openreview-icon-minimal.svg", "openreview-icon.svg"):
-            svg_icon = root / name
-            if svg_icon.exists():
-                return svg_icon
+        svg_icon = root / "openreview-primary-logo.svg"
+        if svg_icon.exists():
+            return svg_icon
     ico = ICONS_DIR / "openreview.ico"
     if ico.exists():
         return ico
@@ -36,50 +35,46 @@ def get_app_icon_path() -> Path:
 
 
 def get_app_logo_path() -> Path:
-    """Return the absolute path to the OpenReview logo for the About dialog."""
+    """Return the absolute path to the OpenReview horizontal logo for the About dialog."""
     for root in (PROJECT_ROOT, RESOURCES_DIR, RESOURCES_DIR.parent):
-        for name in ("openreview-logo-minimal.svg", "openreview-logo.svg"):
-            svg_logo = root / name
-            if svg_logo.exists():
-                return svg_logo
+        svg_logo = root / "openreview-logo-horizontal.svg"
+        if svg_logo.exists():
+            return svg_logo
     return get_app_icon_path()
 
 
 def get_app_icon() -> QIcon:
-    """Return a QIcon loaded with openreview-icon-minimal.svg and multi-resolution icon assets."""
+    """Return a QIcon loaded with openreview-primary-logo.svg and multi-resolution icon assets."""
     icon = QIcon()
     found_svg = False
     for root in (PROJECT_ROOT, RESOURCES_DIR, RESOURCES_DIR.parent):
-        for name in ("openreview-icon-minimal.svg", "openreview-icon.svg"):
-            svg_icon = root / name
-            if svg_icon.exists():
-                try:
-                    from PySide6.QtSvg import QSvgRenderer
-                    from PySide6.QtGui import QPixmap, QPainter
-                    from PySide6.QtCore import Qt, QRectF
-                    renderer = QSvgRenderer(str(svg_icon))
-                    if renderer.isValid():
-                        for sz in (16, 20, 24, 32, 48, 64, 128, 256, 512):
-                            pix = QPixmap(sz, sz)
-                            pix.fill(Qt.GlobalColor.transparent)
-                            painter = QPainter(pix)
-                            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-                            renderer.render(painter, QRectF(0, 0, sz, sz))
-                            painter.end()
-                            icon.addPixmap(pix)
-                        found_svg = True
-                        break
-                except Exception:
-                    pass
-                temp = QIcon(str(svg_icon))
-                for sz in (16, 20, 24, 32, 48, 64, 128, 256, 512):
-                    pix = temp.pixmap(sz, sz)
-                    if not pix.isNull():
+        svg_icon = root / "openreview-primary-logo.svg"
+        if svg_icon.exists():
+            try:
+                from PySide6.QtSvg import QSvgRenderer
+                from PySide6.QtGui import QPixmap, QPainter
+                from PySide6.QtCore import Qt, QRectF
+                renderer = QSvgRenderer(str(svg_icon))
+                if renderer.isValid():
+                    for sz in (16, 20, 24, 32, 48, 64, 128, 256, 512):
+                        pix = QPixmap(sz, sz)
+                        pix.fill(Qt.GlobalColor.transparent)
+                        painter = QPainter(pix)
+                        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                        renderer.render(painter, QRectF(0, 0, sz, sz))
+                        painter.end()
                         icon.addPixmap(pix)
-                icon.addFile(str(svg_icon))
-                found_svg = True
-                break
-        if found_svg:
+                    found_svg = True
+                    break
+            except Exception:
+                pass
+            temp = QIcon(str(svg_icon))
+            for sz in (16, 20, 24, 32, 48, 64, 128, 256, 512):
+                pix = temp.pixmap(sz, sz)
+                if not pix.isNull():
+                    icon.addPixmap(pix)
+            icon.addFile(str(svg_icon))
+            found_svg = True
             break
     if not found_svg:
         for name in ["openreview.ico", "openreview.png", "favicon-32x32.png", "favicon-16x16.png"]:
@@ -92,10 +87,9 @@ def get_app_icon() -> QIcon:
 def get_favicon_path() -> Path:
     """Return the absolute path to the favicon."""
     for root in (PROJECT_ROOT, RESOURCES_DIR, RESOURCES_DIR.parent):
-        for name in ("openreview-icon-minimal.svg", "openreview-icon.svg"):
-            svg_icon = root / name
-            if svg_icon.exists():
-                return svg_icon
+        svg_icon = root / "openreview-primary-logo.svg"
+        if svg_icon.exists():
+            return svg_icon
     fav = ICONS_DIR / "favicon.ico"
     if fav.exists():
         return fav
@@ -141,6 +135,40 @@ def get_markup_icon(name: str) -> QIcon:
         icon.addFile(str(p_act), state=QIcon.State.On)
     elif p_norm.exists():
         icon.addFile(str(p_norm), state=QIcon.State.On)
+    return icon
+
+
+_VFX_ICON_CACHE: dict[str, QIcon] = {}
+
+
+def get_vfx_icon(name: str) -> QIcon:
+    """Return a cached high-DPI QIcon loaded from resources/icons/<name>.svg."""
+    if name in _VFX_ICON_CACHE:
+        return _VFX_ICON_CACHE[name]
+
+    svg_p = ICONS_DIR / f"{name}.svg"
+    icon = QIcon()
+    if svg_p.exists():
+        try:
+            from PySide6.QtSvg import QSvgRenderer
+            from PySide6.QtGui import QPixmap, QPainter
+            from PySide6.QtCore import Qt, QRectF
+            renderer = QSvgRenderer(str(svg_p))
+            if renderer.isValid():
+                for sz in (16, 20, 24, 32, 48):
+                    pix = QPixmap(sz, sz)
+                    pix.fill(Qt.GlobalColor.transparent)
+                    painter = QPainter(pix)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                    renderer.render(painter, QRectF(0, 0, sz, sz))
+                    painter.end()
+                    icon.addPixmap(pix)
+        except Exception:
+            icon.addFile(str(svg_p))
+    else:
+        icon.addFile(str(svg_p))
+
+    _VFX_ICON_CACHE[name] = icon
     return icon
 
 

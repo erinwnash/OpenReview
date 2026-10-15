@@ -19,7 +19,7 @@ from pathlib import Path
 
 
 PKG_NAME = "openreview"
-PKG_VERSION = "1.0.0"
+PKG_VERSION = "1.0.1"
 PKG_RELEASE = "1"
 PKG_ARCH_DEB = "amd64"
 PKG_ARCH_RPM = "x86_64"
@@ -79,7 +79,7 @@ def collect_linux_payload(project_root: Path) -> list[PackageEntry]:
     add_tree(project_root / "docs" / "html", "/opt/openreview/docs/html")
 
     # 3. Root entry points and metadata
-    for root_file in ("run.py", "pyproject.toml", "README.md", "ARCHITECTURE.md", "openreview-icon.svg", "openreview-logo.svg"):
+    for root_file in ("run.py", "pyproject.toml", "README.md", "ARCHITECTURE.md", "openreview-primary-logo.svg", "openreview-logo-horizontal.svg"):
         p = project_root / root_file
         if p.is_file():
             raw = p.read_bytes().replace(b"\r\n", b"\n")
@@ -123,7 +123,7 @@ def collect_linux_payload(project_root: Path) -> list[PackageEntry]:
     icon_png = project_root / "src" / "openreview" / "resources" / "icons" / "openreview.png"
     if icon_png.is_file():
         add_bytes("/usr/share/icons/hicolor/256x256/apps/openreview.png", icon_png.read_bytes(), mode=0o644)
-    icon_svg = project_root / "openreview-icon.svg"
+    icon_svg = project_root / "openreview-primary-logo.svg"
     if icon_svg.is_file():
         add_bytes(
             "/usr/share/icons/hicolor/scalable/apps/openreview.svg",

@@ -14,9 +14,8 @@ datas = [
 ]
 
 for svg_name in [
-    "openreview-icon.svg", "openreview-logo.svg",
-    "openreview-icon-minimal.svg", "openreview-logo-minimal.svg",
-    "openreview-logo-minimal-monochrome.svg"
+    "openreview-primary-logo.svg",
+    "openreview-logo-horizontal.svg",
 ]:
     svg_file = project_root / svg_name
     if svg_file.exists():

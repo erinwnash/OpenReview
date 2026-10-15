@@ -52,17 +52,18 @@ def test_markup_sliders_transparent_background(qtbot):
 
 
 def test_minimal_vector_icons_and_logo():
-    """Verify minimal SVGs are resolved for app icon, logo, and favicon."""
+    """Verify primary and horizontal vector SVGs are resolved for app icon, logo, and favicon."""
     icon_p = get_app_icon_path()
     logo_p = get_app_logo_path()
     fav_p = get_favicon_path()
 
-    assert "minimal.svg" in icon_p.name
-    assert "minimal.svg" in logo_p.name
-    assert "minimal.svg" in fav_p.name
+    assert icon_p.name == "openreview-primary-logo.svg"
+    assert logo_p.name == "openreview-logo-horizontal.svg"
+    assert fav_p.name == "openreview-primary-logo.svg"
 
     app_icon = get_app_icon()
     assert not app_icon.isNull()
+    assert len(app_icon.availableSizes()) > 0
     # Check multi-res pixmaps rendered
     pix_16 = app_icon.pixmap(16, 16)
     pix_64 = app_icon.pixmap(64, 64)

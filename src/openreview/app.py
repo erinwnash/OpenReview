@@ -47,9 +47,36 @@ def create_application() -> QApplication:
 
 
 def main() -> int:
+    import os
+
+    # Command-line registration flags
+    if "--register-associations" in sys.argv:
+        from openreview.core.file_associations import register_file_associations
+        success = register_file_associations()
+        print("File associations registered successfully." if success else "Failed to register file associations.")
+        return 0 if success else 1
+
+    if "--unregister-associations" in sys.argv:
+        from openreview.core.file_associations import unregister_file_associations
+        success = unregister_file_associations()
+        print("File associations unregistered." if success else "Failed to unregister file associations.")
+        return 0 if success else 1
+
+    # Extract initial file path if launched via Explorer double-click or CLI argument
+    initial_file = None
+    for arg in sys.argv[1:]:
+        clean_arg = arg.strip("\"'")
+        if clean_arg and not clean_arg.startswith("-") and os.path.exists(clean_arg):
+            initial_file = clean_arg
+            break
+
     app = create_application()
     window = MainWindow()
     window.show()
+
+    if initial_file:
+        window.load_initial_file(initial_file)
+
     return app.exec()
 
 

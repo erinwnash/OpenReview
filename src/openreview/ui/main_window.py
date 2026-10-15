@@ -41,6 +41,7 @@ from openreview.core.cache import (
     get_dynamic_gb_presets,
 )
 from openreview.core.reader import SyntheticPatternReader, ReaderEngine
+from openreview.core.async_source_loader import AsyncSourceLoader
 from openreview.core.video_reader import is_video_file, VideoMediaReader
 from openreview.core.preferences import PreferencesManager, UserPreferences
 from openreview.core.shortcuts import ShortcutManager
@@ -149,16 +150,29 @@ class MainWindow(QMainWindow):
         initial_cache_mode = CacheMode(getattr(prefs, "default_cache_mode", "off"))
         self._last_active_cache_mode = CacheMode.PLAY_AHEAD
         use_auto_ram = getattr(prefs, "auto_ram_budget", True)
+        disk_cache_dir = getattr(prefs, "disk_cache_dir", "") or None
+        enable_disk = getattr(prefs, "enable_disk_cache", True)
+        disk_gb = getattr(prefs, "max_disk_cache_gb", 20.0)
         self.cache = RingBufferCache(
             max_memory_mb=None if use_auto_ram else prefs.lookahead_cache_gb * 1024.0,
             lookahead_frames=getattr(prefs, "prefetch_buffer_size", 48),
             lookbehind_frames=int(getattr(prefs, "prefetch_buffer_size", 48) * (prefs.lookahead_behind_pct / 100.0)),
             mode=initial_cache_mode,
             auto_memory_budget=use_auto_ram,
+            enable_disk_cache=enable_disk,
+            max_disk_mb=disk_gb * 1024.0,
+            disk_cache_dir=disk_cache_dir,
             parent=self,
         )
         self.reader = None
         self.reader_engine = ReaderEngine(None, self.cache, parent=self)
+        self.async_source_loader = AsyncSourceLoader(self)
+        self.async_source_loader.source_discovered.connect(self._on_async_source_discovered)
+        self.async_source_loader.progress_message.connect(lambda msg: self.statusBar().showMessage(msg, 3000))
+        self.reader_engine.background_progress.connect(self._on_background_caching_progress)
+        self.cache.disk_usage_changed.connect(
+            lambda _u, _m: self._on_memory_changed(self.cache.get_memory_stats()[0], self.cache.get_memory_stats()[1])
+        )
         self.ocio_manager = OCIOManager()
         self.annotation_store = AnnotationStore(self)
         self.comparison_state = ComparisonState()
@@ -170,6 +184,13 @@ class MainWindow(QMainWindow):
         self._current_media_path: Optional[str] = None
         self._current_media_type: str = "none"
         self._current_session_file: Optional[Path] = None
+        self._suppress_in_out_record: bool = False
+
+        # Multi-Channel EXR Review & Contact Sheet State
+        self._is_exr_contact_sheet_active: bool = False
+        self._auto_depth_enabled: bool = True
+        self._exr_contact_sheet_tile_map: Dict[str, Tuple[int, int, int, int]] = {}
+        self._current_exr_layer: str = "beauty"
 
         # Central Session Graph (Media Bins, Folders, Sequences, Stacks, Layouts)
         self.session_graph = SessionGraph(self)
@@ -206,8 +227,8 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
         # Apply Startup Preferences
-        if prefs.default_cache_mode != "off":
-            self._on_set_cache_mode(CacheMode(prefs.default_cache_mode), start_prefetch=False)
+        init_cache_mode = CacheMode(getattr(prefs, "default_cache_mode", "off"))
+        self._on_set_cache_mode(init_cache_mode, start_prefetch=False)
         if prefs.start_fullscreen:
             self._enter_borderless_fullscreen()
         if prefs.play_on_startup:
@@ -296,6 +317,11 @@ class MainWindow(QMainWindow):
         self.sources_dock.panel.sources_cleared_to_fresh_start.connect(lambda: self._on_close_session(prompt=False))
         self.sources_dock.panel.reload_source_requested.connect(self._on_reload_source_media)
         self.sources_dock.panel.reload_source_update_requested.connect(self._on_reload_source_update)
+        self.sources_dock.panel.exr_contact_sheet_requested.connect(lambda: self._on_toggle_exr_contact_sheet(True))
+        self.sources_dock.panel.exr_view_single_requested.connect(self._on_view_single_exr_pass)
+        self.sources_dock.panel.exr_export_sheet_requested.connect(self._on_export_exr_contact_sheet)
+        self.sources_dock.panel.exr_show_inspector_requested.connect(self._on_show_exr_inspector)
+        self.sources_dock.panel.exr_metadata_requested.connect(self._on_show_exr_metadata_path)
         self.session_graph.active_view_changed.connect(self._on_active_view_changed)
         self.session_graph.source_properties_changed.connect(self._on_source_renamed_update_title)
         self.session_graph.view_properties_changed.connect(lambda vt, vid: self._on_source_renamed_update_title())
@@ -315,6 +341,7 @@ class MainWindow(QMainWindow):
 
         # 3. Maximized Viewport Canvas (Sole Central Widget)
         self.viewport = ViewportCanvas(self.annotation_store, self)
+        self.viewport.contact_sheet_tile_double_clicked.connect(self._on_exr_contact_sheet_tile_double_clicked)
         self.top_bar.scrub_mode_toggled.connect(self._on_scrub_mode_toggled)
         self.viewport.scrub_requested.connect(self._on_viewport_scrub)
         self.viewport.set_scrub_mode(True)
@@ -438,6 +465,12 @@ class MainWindow(QMainWindow):
         # J1. EXR Multilayer Pass Inspector HUD
         self.layers_widget = HUDLayersWidget()
         self.layers_widget.layer_changed.connect(self._on_layer_changed)
+        self.layers_widget.contact_sheet_toggled.connect(self._on_toggle_exr_contact_sheet)
+        self.layers_widget.view_single_requested.connect(self._on_view_single_exr_pass)
+        self.layers_widget.export_contact_sheet_requested.connect(self._on_export_exr_contact_sheet)
+        self.layers_widget.channel_mode_requested.connect(self._on_channel_changed)
+        self.layers_widget.auto_depth_toggled.connect(self._on_toggle_auto_depth)
+        self.layers_widget.metadata_requested.connect(self._on_show_active_exr_metadata)
         self.hud_layers = FloatingHUDCard(
             title="EXR Multilayer Pass Inspector",
             content_widget=self.layers_widget,
@@ -1657,12 +1690,13 @@ class MainWindow(QMainWindow):
 
         elif isinstance(viewable, LayoutView):
             def _fetch(src: SourceItem) -> Optional[np.ndarray]:
-                d = self.cache.get_source_frame(src.id, frame)
+                sf = viewable.resolve_tile_frame(src, frame, self.session_graph.sources)
+                d = self.cache.get_source_frame(src.id, sf)
                 if d is None:
                     r = self._get_reader_for_source(src)
-                    d = self._normalize_frame_data(r.read_frame(frame)) if r else None
+                    d = self._normalize_frame_data(r.read_frame(sf)) if r else None
                     if self.cache.mode != CacheMode.OFF and d is not None:
-                        self.cache.put_source_frame(src.id, frame, d)
+                        self.cache.put_source_frame(src.id, sf, d)
                 return d
 
             comp_data = composite_layout_grid(
@@ -1678,7 +1712,19 @@ class MainWindow(QMainWindow):
             if self.hud_hist.isVisible() and comp_data is not None:
                 self.hist_widget.update_frame(comp_data)
 
+        elif getattr(self, "_is_exr_contact_sheet_active", False) and self._is_current_media_exr(viewable, frame):
+            comp_data, tile_map = self._composite_current_exr_contact_sheet(viewable, frame)
+            self._exr_contact_sheet_tile_map = tile_map
+            self.viewport.set_contact_sheet_mode(True, tile_map)
+            self.viewport.set_reference_frame(None)
+            self.viewport.set_primary_frame(frame, comp_data)
+            if comp_data is not None and hasattr(comp_data, "shape") and len(comp_data.shape) >= 2:
+                self._update_resolution_status(f"{comp_data.shape[1]}x{comp_data.shape[0]} (Contact Sheet)")
+            if self.hud_hist.isVisible() and comp_data is not None:
+                self.hist_widget.update_frame(comp_data)
+
         else:
+            self.viewport.set_contact_sheet_mode(False, None)
             # Standard single source or fallback
             cur_src_id = viewable.id if (viewable and hasattr(viewable, "id")) else None
             self.cache.set_active_source(cur_src_id)
@@ -1771,7 +1817,8 @@ class MainWindow(QMainWindow):
             for sid in viewable.source_ids:
                 src = self.session_graph.sources.get(sid)
                 if src:
-                    res.append((src.id, timeline_frame, self._get_reader_for_source(src)))
+                    tile_f = viewable.resolve_tile_frame(src, timeline_frame, self.session_graph.sources)
+                    res.append((src.id, tile_f, self._get_reader_for_source(src)))
             return res
         elif isinstance(viewable, SourceItem):
             return [(viewable.id, timeline_frame, self._get_reader_for_source(viewable))]
@@ -1785,6 +1832,9 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_cache_started", False):
             return
         if self.cache.mode != CacheMode.OFF:
+            if hasattr(self, "reader_engine") and self.reader_engine:
+                if getattr(self.reader_engine, "is_paused", False):
+                    self.reader_engine.resume_prefetch()
             self.reader_engine.request_prefetch(
                 self.clock.start_frame,
                 self.clock.end_frame,
@@ -1863,8 +1913,10 @@ class MainWindow(QMainWindow):
     def _on_cache_updated(self) -> None:
         viewable = self.session_graph.get_active_viewable() if hasattr(self, "session_graph") else None
         cached = set()
+        disk_cached = set()
         if isinstance(viewable, SourceItem):
             cached = self.cache.get_source_cached_frames(viewable.id)
+            disk_cached = self.cache.get_source_disk_cached_frames(viewable.id)
         elif isinstance(viewable, SequenceView):
             clips = getattr(viewable, "clips", [])
             if clips:
@@ -1873,11 +1925,18 @@ class MainWindow(QMainWindow):
                     for sf in src_frames:
                         if clip.in_frame <= sf <= clip.out_frame:
                             cached.add(clip.timeline_in + (sf - clip.in_frame))
+                    src_dframes = self.cache.get_source_disk_cached_frames(clip.source_id)
+                    for sf in src_dframes:
+                        if clip.in_frame <= sf <= clip.out_frame:
+                            disk_cached.add(clip.timeline_in + (sf - clip.in_frame))
             else:
                 for f in range(viewable.start_frame, viewable.end_frame + 1):
                     src, sf = viewable.resolve_frame(f, self.session_graph.sources)
-                    if src and self.cache.has_source_frame(src.id, sf):
-                        cached.add(f)
+                    if src:
+                        if self.cache.has_source_frame_ram(src.id, sf):
+                            cached.add(f)
+                        elif self.cache.has_source_frame_disk(src.id, sf):
+                            disk_cached.add(f)
         elif isinstance(viewable, StackView):
             if self.viewport.comparison_state.mode != ComparisonMode.OFF:
                 la = viewable.get_layer_a(self.session_graph.sources)
@@ -1886,23 +1945,39 @@ class MainWindow(QMainWindow):
                     ca = self.cache.get_source_cached_frames(la.id)
                     cb = self.cache.get_source_cached_frames(lb.id)
                     cached = ca.intersection(cb)
+                    cda = self.cache.get_source_disk_cached_frames(la.id)
+                    cdb = self.cache.get_source_disk_cached_frames(lb.id)
+                    disk_cached = cda.intersection(cdb)
                 elif la:
                     cached = self.cache.get_source_cached_frames(la.id)
+                    disk_cached = self.cache.get_source_disk_cached_frames(la.id)
             else:
                 cur = viewable.get_current_layer(self.session_graph.sources)
                 if cur:
                     cached = self.cache.get_source_cached_frames(cur.id)
+                    disk_cached = self.cache.get_source_disk_cached_frames(cur.id)
         elif isinstance(viewable, LayoutView):
             sids = [s for s in viewable.source_ids if s in self.session_graph.sources]
             if sids:
                 cached = self.cache.get_source_cached_frames(sids[0]).copy()
+                disk_cached = self.cache.get_source_disk_cached_frames(sids[0]).copy()
                 for sid in sids[1:]:
                     cached.intersection_update(self.cache.get_source_cached_frames(sid))
+                    disk_cached.intersection_update(self.cache.get_source_disk_cached_frames(sid))
         else:
             cached = self.cache.get_cached_frames()
+            disk_cached = self.cache.get_disk_cached_frames()
 
         used_mb, max_mb, pct = self.cache.get_memory_stats()
-        self.timeline.update_cache_display(cached, pct, cache_mode=self.cache.mode.value)
+        d_used_mb, d_max_mb, d_pct = self.cache.get_disk_memory_stats()
+        self.timeline.update_cache_display(
+            cached,
+            pct,
+            cache_mode=self.cache.mode.value,
+            disk_cached_frames=disk_cached,
+            disk_pct_used=d_pct,
+        )
+        disk_info = f" | Disk: {d_used_mb:.0f}MB" if d_used_mb > 0 else ""
         if self.cache.mode == CacheMode.OFF:
             self.cache_status_label.setText("Cache: OFF")
             self.cache_status_label.setStyleSheet("color: #888888; font-family: monospace;")
@@ -1913,7 +1988,7 @@ class MainWindow(QMainWindow):
                 CacheMode.ALL: "Full",
             }
             tag = mode_tags.get(self.cache.mode, "RAM")
-            self.cache_status_label.setText(f"Cache: Idle [{tag}] (Shift+C)")
+            self.cache_status_label.setText(f"Cache: Idle [{tag}]{disk_info} (Shift+C)")
             self.cache_status_label.setStyleSheet("color: #aaaaaa; font-family: monospace;")
         else:
             mode_tags = {
@@ -1922,7 +1997,7 @@ class MainWindow(QMainWindow):
                 CacheMode.ALL: "Full",
             }
             tag = mode_tags.get(self.cache.mode, "RAM")
-            self.cache_status_label.setText(f"Cache: {used_mb:.1f}MB / {max_mb:.0f}MB [{tag}]")
+            self.cache_status_label.setText(f"Cache: {used_mb:.1f}MB / {max_mb:.0f}MB [{tag}]{disk_info}")
             self.cache_status_label.setStyleSheet("color: #2ecc71; font-family: monospace;")
 
     def _on_set_cache_mode(self, mode: CacheMode | str, start_prefetch: Optional[bool] = None) -> None:
@@ -1941,9 +2016,13 @@ class MainWindow(QMainWindow):
             if hasattr(self, "_delayed_cache_timer"):
                 self._delayed_cache_timer.stop()
         else:
-            if start_prefetch is True:
+            if hasattr(self, "clock"):
+                self.cache.set_region_bounds(self.clock.in_frame, self.clock.out_frame)
+            if start_prefetch is not False:
                 self._cache_started = True
             if getattr(self, "_cache_started", False):
+                if hasattr(self, "reader_engine") and self.reader_engine:
+                    self.reader_engine.resume_prefetch()
                 self._trigger_prefetch()
         self._on_cache_updated()
         mode_names = {
@@ -1955,24 +2034,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Cache Mode: {mode_names.get(mode, str(mode))}", 3000)
 
     def _on_toggle_cache(self) -> None:
-        """Toggle between Cache active/dormant, starting In/Out region cache mode (Shift+C)."""
-        if not getattr(self, "_cache_started", False):
-            self._cache_started = True
-            if self.cache.mode == CacheMode.OFF:
-                self.cache.set_mode(CacheMode.REGION)
-                if CacheMode.REGION in self.cache_mode_actions:
-                    self.cache_mode_actions[CacheMode.REGION].setChecked(True)
-            self._trigger_prefetch()
-            self._on_cache_updated()
-            self.statusBar().showMessage(f"RAM Caching Started [{self.cache.mode.value}].", 3000)
+        """Toggle between Cache active/OFF, starting In/Out region cache mode (Shift+C)."""
+        if not getattr(self, "_cache_started", False) or self.cache.mode == CacheMode.OFF:
+            self._on_set_cache_mode(CacheMode.REGION, start_prefetch=True)
+            self.statusBar().showMessage("RAM Caching Started [In/Out Region].", 3000)
         else:
-            self._cache_started = False
-            if hasattr(self, "reader_engine") and self.reader_engine:
-                self.reader_engine.pause_prefetch()
-            if hasattr(self, "_delayed_cache_timer"):
-                self._delayed_cache_timer.stop()
-            self._on_cache_updated()
-            self.statusBar().showMessage("RAM Caching Paused (Shift+C to resume).", 3000)
+            self._on_set_cache_mode(CacheMode.OFF)
+            self.statusBar().showMessage("RAM Caching Turned OFF (Shift+C to enable).", 3000)
 
     def _on_cycle_cache_mode(self) -> None:
         """Cycle through cache modes when clicking the compact cache bar."""
@@ -1983,6 +2051,15 @@ class MainWindow(QMainWindow):
 
     def _on_in_out_changed_for_cache(self, in_f: int, out_f: int) -> None:
         self.cache.set_region_bounds(in_f, out_f)
+        if not getattr(self, "_suppress_in_out_record", False) and hasattr(self, "session_graph"):
+            viewable = self.session_graph.get_active_viewable()
+            if viewable is not None:
+                if in_f == self.clock.start_frame and out_f == self.clock.end_frame:
+                    viewable.manual_in = None
+                    viewable.manual_out = None
+                else:
+                    viewable.manual_in = in_f
+                    viewable.manual_out = out_f
         if self.cache.mode == CacheMode.REGION:
             self._trigger_prefetch()
 
@@ -2109,7 +2186,9 @@ class MainWindow(QMainWindow):
                 CacheMode.ALL: "Full",
             }
             tag = mode_tags.get(self.cache.mode, "RAM")
-            self.cache_status_label.setText(f"Cache: {used_mb:.1f}MB / {max_mb:.0f}MB [{tag}]")
+            d_used, d_max, _ = self.cache.get_disk_memory_stats()
+            disk_str = f" | Disk: {d_used:.0f}MB" if d_used > 0 else ""
+            self.cache_status_label.setText(f"Cache: {used_mb:.1f}MB / {max_mb:.0f}MB [{tag}]{disk_str}")
 
     def _on_fps_measured(self, fps: float) -> None:
         self.fps_status_label.setText(f"{fps:.2f} FPS (Real-time)")
@@ -2201,6 +2280,10 @@ class MainWindow(QMainWindow):
     def _on_layer_changed(self, layer_name: str) -> None:
         """Handle switching of multi-channel EXR layers."""
         self._current_exr_layer = layer_name
+        if hasattr(self, "top_bar") and hasattr(self.top_bar, "set_current_layer"):
+            self.top_bar.set_current_layer(layer_name)
+        if hasattr(self, "layers_widget"):
+            self.layers_widget.set_current_layer(layer_name)
         if hasattr(self, "reader") and self.reader and hasattr(self.reader, "set_layer"):
             self.reader.set_layer(layer_name)
         if hasattr(self, "_source_readers"):
@@ -2211,6 +2294,147 @@ class MainWindow(QMainWindow):
         self.cache.clear()
         self._on_frame_changed(self.clock.current_frame)
         self.statusBar().showMessage(f"Active EXR Layer: {layer_name}", 3000)
+
+    def _get_active_exr_frame_path(self, viewable: Any, frame: int) -> Optional[str]:
+        """Resolve physical EXR file path for the given frame and active viewable."""
+        if hasattr(self, "reader") and self.reader:
+            if hasattr(self.reader, "_frame_path"):
+                return self.reader._frame_path(frame)
+            elif hasattr(self.reader, "seq") and hasattr(self.reader.seq, "frame_path"):
+                return self.reader.seq.frame_path(frame)
+        if isinstance(viewable, SourceItem):
+            return getattr(viewable, "path", getattr(viewable, "file_path", None))
+        if getattr(self, "_current_media_path", None):
+            return self._current_media_path
+        return None
+
+    def _is_current_media_exr(self, viewable: Any, frame: int) -> bool:
+        p = self._get_active_exr_frame_path(viewable, frame)
+        return bool(p and str(p).lower().endswith(".exr"))
+
+    def _composite_current_exr_contact_sheet(
+        self, viewable: Any, frame: int
+    ) -> Tuple[np.ndarray, Dict[str, Tuple[int, int, int, int]]]:
+        """Read all available layers of active EXR frame and composite into adaptive contact sheet grid."""
+        f_path = self._get_active_exr_frame_path(viewable, frame)
+        if not f_path or not os.path.exists(f_path):
+            empty = np.zeros((1080, 1920, 4), dtype=np.float32)
+            empty[:, :, 3] = 1.0
+            return empty, {}
+
+        from openreview.core.image_io import read_image_file, get_exr_channels
+        from openreview.core.exr_contact_sheet import build_exr_contact_sheet
+
+        lyrs = getattr(self.layers_widget, "_layers", [])
+        if not lyrs or lyrs == ["beauty"]:
+            info = get_exr_channels(f_path)
+            lyrs = list(info.get("layers", {}).keys())
+            for cl in info.get("cryptomatte_layers", []):
+                if cl not in lyrs:
+                    lyrs.append(cl)
+            if not lyrs:
+                lyrs = ["beauty"]
+
+        layer_frames = {}
+        for lyr in lyrs:
+            arr = read_image_file(f_path, layer=lyr)
+            if arr is not None:
+                layer_frames[lyr] = arr
+
+        base_w = getattr(self.reader, "width", 1920) or 1920
+        base_h = getattr(self.reader, "height", 1080) or 1080
+
+        return build_exr_contact_sheet(
+            layer_frames,
+            base_w=base_w,
+            base_h=base_h,
+            auto_depth=getattr(self, "_auto_depth_enabled", True),
+            draw_labels=True,
+        )
+
+    def _on_toggle_exr_contact_sheet(self, enabled: bool) -> None:
+        """Toggle adaptive multi-channel EXR Contact Sheet mode."""
+        self._is_exr_contact_sheet_active = enabled
+        if hasattr(self, "layers_widget"):
+            self.layers_widget.set_contact_sheet_active(enabled)
+        # Clear cache and trigger immediate frame rendering
+        self.cache.clear()
+        self._on_frame_changed(self.clock.current_frame)
+        self.statusBar().showMessage(
+            f"EXR Contact Sheet: {'Active' if enabled else 'Disabled'}",
+            2500,
+        )
+
+    def _on_view_single_exr_pass(self) -> None:
+        """Exit contact sheet mode and revert back to beauty or primary first pass."""
+        self._is_exr_contact_sheet_active = False
+        target_pass = "beauty"
+        if hasattr(self, "layers_widget") and self.layers_widget._layers:
+            if "beauty" in self.layers_widget._layers:
+                target_pass = "beauty"
+            else:
+                target_pass = self.layers_widget._layers[0]
+
+        if hasattr(self, "layers_widget"):
+            self.layers_widget.set_contact_sheet_active(False)
+            self.layers_widget.set_current_layer(target_pass)
+        if hasattr(self, "top_bar") and hasattr(self.top_bar, "set_current_layer"):
+            self.top_bar.set_current_layer(target_pass)
+
+        self._on_layer_changed(target_pass)
+        self.statusBar().showMessage(f"Single Pass View: {target_pass}", 2500)
+
+    def _on_exr_contact_sheet_tile_double_clicked(self, layer_name: str) -> None:
+        """Handle canvas double click on a contact sheet tile: solo that specific pass."""
+        self._is_exr_contact_sheet_active = False
+        if hasattr(self, "layers_widget"):
+            self.layers_widget.set_contact_sheet_active(False)
+            self.layers_widget.set_current_layer(layer_name)
+        if hasattr(self, "top_bar") and hasattr(self.top_bar, "set_current_layer"):
+            self.top_bar.set_current_layer(layer_name)
+
+        self._on_layer_changed(layer_name)
+        if hasattr(self, "viewport") and hasattr(self.viewport, "show_toast"):
+            self.viewport.show_toast(f"Solo Pass: {layer_name}")
+        self.statusBar().showMessage(f"Soloed Pass from Contact Sheet: {layer_name}", 3000)
+
+    def _on_toggle_auto_depth(self, enabled: bool) -> None:
+        """Toggle auto-range float normalization on Z/Depth passes."""
+        self._auto_depth_enabled = enabled
+        self.cache.clear()
+        self._on_frame_changed(self.clock.current_frame)
+        self.statusBar().showMessage(f"Auto-Depth Normalization: {'On' if enabled else 'Off'}", 2000)
+
+    def _on_show_active_exr_metadata(self) -> None:
+        """Open EXR Header Metadata Dialog for current media."""
+        path = getattr(self, "_current_media_path", None)
+        if not path and hasattr(self, "reader") and self.reader:
+            if hasattr(self.reader, "_frame_path"):
+                path = self.reader._frame_path(self.clock.current_frame)
+            elif hasattr(self.reader, "seq") and hasattr(self.reader.seq, "frame_path"):
+                path = self.reader.seq.frame_path(self.clock.current_frame)
+        if path:
+            self._on_show_exr_metadata_path(path)
+        else:
+            QMessageBox.information(self, "No Active EXR", "No active OpenEXR media file loaded.")
+
+    def _on_show_exr_metadata_path(self, path: str) -> None:
+        """Open EXR Header Metadata Dialog for specific file path."""
+        from openreview.ui.exr_metadata_dialog import EXRMetadataDialog
+        dlg = EXRMetadataDialog(path, self)
+        dlg.exec()
+
+    def _on_show_exr_inspector(self) -> None:
+        """Reveal and focus EXR Multilayer Pass Inspector floating HUD."""
+        if hasattr(self, "hud_layers"):
+            self.hud_layers.show()
+            self.hud_layers.raise_()
+
+    def _on_export_exr_contact_sheet(self) -> None:
+        """Pre-configure and trigger Export Dialog specifically for EXR Contact Sheet."""
+        if not self._is_exr_contact_sheet_active:
+            self._on_toggle_exr_contact_sheet(True)
+        self._on_export_media()
 
     def _on_stereo_changed(self, mode: int) -> None:
         """Handle Stereo 3D mode switching."""
@@ -2336,7 +2560,12 @@ class MainWindow(QMainWindow):
     def _render_frame_for_export(self, frame_num: int) -> np.ndarray:
         """Render a specific frame with annotations at native source frame resolution."""
         raw = None
-        if hasattr(self, "session_graph"):
+        if getattr(self, "_is_exr_contact_sheet_active", False):
+            viewable = self.session_graph.get_active_viewable() if hasattr(self, "session_graph") else None
+            if self._is_current_media_exr(viewable, frame_num):
+                raw, _ = self._composite_current_exr_contact_sheet(viewable, frame_num)
+
+        if raw is None and hasattr(self, "session_graph"):
             viewable = self.session_graph.get_active_viewable()
             if isinstance(viewable, SourceItem):
                 raw = self.cache.get_source_frame(viewable.id, frame_num)
@@ -2471,6 +2700,100 @@ class MainWindow(QMainWindow):
         if hasattr(self, "viewport") and self.viewport:
             self.viewport.show_toast(msg)
 
+    def _perform_atomic_session_reset(self) -> None:
+        """Atomically clear all session state, media, caches, background workers, and UI panels."""
+        self._suppress_in_out_record = True
+
+        # 1. Stop playback
+        self.clock.pause()
+
+        # 2. Cancel and drain background prefetching and secondary background caching
+        if hasattr(self, "reader_engine") and self.reader_engine:
+            self.reader_engine.clear_background_cache_queue()
+            self.reader_engine.cancel_pending()
+            if hasattr(self.reader_engine, "thread_pool"):
+                self.reader_engine.thread_pool.clear()
+            self.reader_engine.set_reader(None)
+
+        self.reader = None
+
+        # 3. Clear RAM and Disk caches and timeline indicators
+        if hasattr(self, "cache") and self.cache:
+            self.cache.clear()
+            self.cache.set_active_source(None)
+        if hasattr(self, "timeline") and self.timeline:
+            self.timeline.update_cache_display(
+                set(), 0.0, cache_mode=self.cache.mode.value if hasattr(self, "cache") else "off"
+            )
+
+        # 4. Clear Viewport Canvas completely
+        if hasattr(self, "viewport") and self.viewport:
+            self.viewport.clear_canvas()
+            self.viewport.reset_transforms()
+            self.viewport.set_matte(None)
+            self.viewport.set_background_mode("black")
+            self.viewport.set_reference_frame(None)
+
+        # 5. Clear Annotations, Marks, Audio & State
+        if hasattr(self, "annotation_store") and self.annotation_store:
+            self.annotation_store.clear_all()
+        if hasattr(self, "clock") and self.clock:
+            self.clock.clear_all_bookmarks()
+            self.clock.set_range(1, 100, reset_in_out=True)
+            self.clock.set_frame(1)
+
+        # 6. Reset Top Bar Controls
+        if hasattr(self, "top_bar") and self.top_bar:
+            self.top_bar.reset_exposure()
+            self.top_bar.reset_gamma()
+            self.top_bar.set_channel_mode(0)
+
+        # 7. Unload Audio
+        if hasattr(self, "audio_engine") and self.audio_engine:
+            self.audio_engine.unload_audio()
+            self.audio_engine.reset_offsets()
+
+        # 8. Reset comparison state
+        if hasattr(self, "comparison_state") and self.comparison_state:
+            self.comparison_state.reset()
+            if hasattr(self, "viewport") and self.viewport:
+                self.viewport.comparison_state = self.comparison_state
+                self.viewport.update()
+
+        # 9. Clear Session Graph and Sources panel
+        if hasattr(self, "session_graph") and self.session_graph:
+            self.session_graph.clear()
+        if hasattr(self, "_source_readers"):
+            self._source_readers.clear()
+
+        if hasattr(self, "sources_dock") and self.sources_dock:
+            panel = self.sources_dock.panel
+            panel.tree.clear()
+            panel.refresh_tree()
+            panel.list_inputs.clear()
+            panel.lbl_inputs_view.setText("Inputs for: None")
+            if hasattr(panel, "frame_clip_edit"):
+                panel.frame_clip_edit.hide()
+            if hasattr(panel, "frame_layout_edit"):
+                panel.frame_layout_edit.hide()
+
+        self._current_media_path = None
+        self._current_media_type = "none"
+        self._current_session_file = None
+        self._current_stereo_pair = None
+        self._is_exr_contact_sheet_active = False
+        self._exr_contact_sheet_tile_map.clear()
+        if hasattr(self, "viewport") and self.viewport:
+            self.viewport.set_contact_sheet_mode(False, None)
+        if hasattr(self, "layers_widget"):
+            self.layers_widget.set_contact_sheet_active(False)
+            self.layers_widget.refresh_list(["beauty"])
+        self._update_layered_input_menu_visibility()
+        self._update_resolution_status("No Media")
+        self.setWindowTitle("OpenReview - Professional VFX Review & Playback")
+        self.statusBar().showMessage("Session cleared - canvas and media reset", 3000)
+        self._suppress_in_out_record = False
+
     def _on_close_session(self, prompt: bool = True) -> None:
         """Close active session and thoroughly clear everything from canvas, player and memory."""
         if prompt:
@@ -2483,61 +2806,7 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 return
 
-        # 1. Stop playback
-        self.clock.pause()
-
-        # 2. Clear readers and background prefetch engine
-        self.reader = None
-        self.reader_engine.set_reader(None)
-
-        # 3. Clear RAM Cache and timeline indicators
-        self.cache.clear()
-        self.timeline.update_cache_display(set(), 0.0, cache_mode=self.cache.mode.value)
-
-        # 4. Clear Viewport Canvas completely
-        self.viewport.clear_canvas()
-        self.viewport.reset_transforms()
-        self.viewport.set_matte(None)
-        self.viewport.set_background_mode("black")
-
-        # 5. Clear Annotations, Marks, Audio & State
-        self.annotation_store.clear_all()
-        self.clock.clear_all_bookmarks()
-        self.clock.set_range(1001, 1200, reset_in_out=True)
-        self.clock.set_frame(1001)
-        self.top_bar.reset_exposure()
-        self.top_bar.reset_gamma()
-        self.top_bar.set_channel_mode(0)
-        self.audio_engine.unload_audio()
-        self.audio_engine.reset_offsets()
-
-        # 6. Reset comparison state
-        self.comparison_state.reset()
-        self.viewport.comparison_state = self.comparison_state
-        self.viewport.update()
-
-        # 7. Reset session paths and labels
-        self._current_media_path = None
-        self._current_media_type = "none"
-        self._current_session_file = None
-        self._update_resolution_status("No Media")
-        self.setWindowTitle("OpenReview - Professional VFX Review & Playback")
-
-        # 8. Clear Session Graph and Sources panel
-        if hasattr(self, "session_graph"):
-            self.session_graph.clear()
-            self._source_readers.clear()
-            if hasattr(self, "sources_dock"):
-                self.sources_dock.panel.refresh_tree()
-                self.sources_dock.panel.list_inputs.clear()
-                self.sources_dock.panel.lbl_inputs_view.setText("Inputs for: None")
-
-        self._current_stereo_pair = None
-        if hasattr(self, "layers_widget"):
-            self.layers_widget.refresh_list(["beauty"])
-        self._update_layered_input_menu_visibility()
-
-        self.statusBar().showMessage("Session closed - canvas and media cleared", 3000)
+        self._perform_atomic_session_reset()
 
     # --------------------------------------------------------------------------
     # Multi-User Remote Dailies Sync & Studio OCIO Handlers
@@ -2745,16 +3014,64 @@ class MainWindow(QMainWindow):
             )
 
         if len(paths) > 1 and hasattr(self, "session_graph"):
-            def _load_secondary_sources():
-                for p in paths[1:]:
-                    self.session_graph.add_source_from_path(p)
-                if hasattr(self, "sources_dock"):
-                    self.sources_dock.panel.refresh_tree()
-            QTimer.singleShot(100, _load_secondary_sources)
+            self.async_source_loader.load_paths_async(paths[1:])
+
+    def _on_async_source_discovered(self, item: Optional[SourceItem], index: int, total: int) -> None:
+        if not item or not hasattr(self, "session_graph"):
+            return
+        self.session_graph.add_sources_batch([item])
+        if hasattr(self, "sources_dock"):
+            self.sources_dock.panel.refresh_tree()
+        self._queue_source_for_background_caching(item)
+
+    def _queue_source_for_background_caching(self, item: SourceItem) -> None:
+        if not hasattr(self, "reader_engine") or not self.reader_engine:
+            return
+        from openreview.core.video_reader import is_video_file, VideoMediaReader
+        from openreview.core.sequence_parser import detect_image_sequence, DiskSequenceReader
+        from openreview.core.reader import DiskMediaReader
+
+        rdr = None
+        if item.media_type == "video":
+            try:
+                rdr = VideoMediaReader(item.path)
+            except Exception:
+                pass
+        elif item.media_type == "sequence":
+            seq = detect_image_sequence(item.path)
+            if seq:
+                rdr = DiskSequenceReader(seq)
+        elif item.media_type == "still":
+            rdr = DiskMediaReader(item.path)
+
+        if rdr:
+            self.reader_engine.queue_source_background_cache(
+                item.id,
+                rdr,
+                item.start_frame,
+                item.end_frame,
+            )
+
+    def _on_background_caching_progress(self, source_id: str, cached: int, total: int) -> None:
+        src_name = ""
+        if hasattr(self, "session_graph") and source_id in self.session_graph.sources:
+            src_name = self.session_graph.sources[source_id].name
+        ram_mb, _, _ = self.cache.get_memory_stats()
+        disk_mb, _, _ = self.cache.get_disk_memory_stats()
+        self.statusBar().showMessage(
+            f"Caching in background: {src_name} ({cached}/{total} frames) | RAM: {ram_mb:.0f}MB | Temp Disk: {disk_mb:.0f}MB",
+            2000,
+        )
 
     def _load_path(self, path: str) -> None:
         if not path or not os.path.exists(path):
             return
+
+        self._is_exr_contact_sheet_active = False
+        if hasattr(self, "layers_widget"):
+            self.layers_widget.set_contact_sheet_active(False)
+        if hasattr(self, "viewport"):
+            self.viewport.set_contact_sheet_mode(False, None)
 
         self.pref_mgr.add_recent_file(path)
         self._update_recent_menu()
@@ -3282,8 +3599,7 @@ class MainWindow(QMainWindow):
             self.cache.set_max_memory_mb(target_mb, auto=False)
             if hasattr(self, "budget_actions") and target_mb in self.budget_actions:
                 self.budget_actions[target_mb].setChecked(True)
-        if prefs.default_cache_mode != "off":
-            self._on_set_cache_mode(CacheMode(prefs.default_cache_mode))
+        self._on_set_cache_mode(CacheMode(getattr(prefs, "default_cache_mode", "off")))
         buf_size = getattr(prefs, "prefetch_buffer_size", 48)
         behind_pct = getattr(prefs, "lookahead_behind_pct", 20.0)
         self.cache.set_prefetch_range(
@@ -3398,28 +3714,9 @@ class MainWindow(QMainWindow):
             "Create a new session? Unsaved changes will be cleared.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        if hasattr(self, "session_graph"):
-            self.session_graph.clear()
-            self._source_readers.clear()
-            if hasattr(self, "sources_dock"):
-                self.sources_dock.panel.refresh_tree()
-        self.annotation_store.clear_all()
-        self.clock.clear_all_bookmarks()
-        self.clock.set_range(1, 100, reset_in_out=True)
-        self.clock.set_frame(1)
-        self.top_bar.reset_exposure()
-        self.top_bar.reset_gamma()
-        self.top_bar.set_channel_mode(0)
-        self.viewport.reset_transforms()
-        self.viewport.set_matte(None)
-        self.viewport.set_background_mode("black")
-        self._current_media_path = None
-        self._current_media_type = "none"
-        self._current_session_file = None
-        self.setWindowTitle("OpenReview - Professional VFX Review & Playback")
-        self.statusBar().showMessage("New session created", 4000)
+        if reply == QMessageBox.StandardButton.Yes:
+            self._perform_atomic_session_reset()
+            self.statusBar().showMessage("New session created", 4000)
 
     def _on_save_session(self) -> None:
         if self._current_session_file:
@@ -3456,13 +3753,31 @@ class MainWindow(QMainWindow):
             "OpenReview Session (*.ovr);;All Files (*.*)",
         )
         if path:
-            try:
-                sess = OpenReviewSession.load_from_file(path)
-                self._apply_session(sess)
-                self._current_session_file = Path(path)
-                self.statusBar().showMessage(f"Loaded Session: {Path(path).name}", 5000)
-            except Exception as e:
-                QMessageBox.critical(self, "Load Error", f"Failed to load session: {e}")
+            self._open_session_file(path)
+
+    def _open_session_file(self, path: str) -> None:
+        """Load an OpenReview session file (.ovr or .json)."""
+        if not path or not os.path.exists(path):
+            return
+        try:
+            sess = OpenReviewSession.load_from_file(path)
+            self._apply_session(sess)
+            self._current_session_file = Path(path)
+            self.pref_mgr.add_recent_file(str(path))
+            self._update_recent_menu()
+            self.statusBar().showMessage(f"Loaded Session: {Path(path).name}", 5000)
+        except Exception as e:
+            QMessageBox.critical(self, "Load Error", f"Failed to load session: {e}")
+
+    def load_initial_file(self, file_path: str) -> None:
+        """Load a file passed from CLI or OS explorer file association."""
+        if not file_path or not os.path.exists(file_path):
+            return
+        p = str(Path(file_path).resolve())
+        if p.lower().endswith((".ovr", ".json")):
+            self._open_session_file(p)
+        else:
+            self._load_path(p)
 
     # --------------------------------------------------------------------------
     # Export Pipeline
@@ -3477,6 +3792,12 @@ class MainWindow(QMainWindow):
 
         def _raw_reader(f: int) -> Optional[np.ndarray]:
             raw = None
+            if getattr(self, "_is_exr_contact_sheet_active", False):
+                viewable = self.session_graph.get_active_viewable() if hasattr(self, "session_graph") else None
+                if self._is_current_media_exr(viewable, f):
+                    comp, _ = self._composite_current_exr_contact_sheet(viewable, f)
+                    return comp
+
             if hasattr(self, "session_graph"):
                 viewable = self.session_graph.get_active_viewable()
                 if isinstance(viewable, SourceItem):
@@ -3922,6 +4243,10 @@ class MainWindow(QMainWindow):
         if self.clock.is_playing:
             self.clock.pause()
 
+        self._suppress_in_out_record = True
+        start_f = 1
+        end_f = 100
+
         if isinstance(viewable, SourceItem):
             self.cache.set_active_source(viewable.id)
             self._current_media_path = viewable.path
@@ -3929,9 +4254,9 @@ class MainWindow(QMainWindow):
             self.reader = self._get_reader_for_source(viewable)
             self.reader_engine.set_reader(self.reader)
             self.clock.set_fps(viewable.fps)
-            self.clock.set_range(viewable.frame_in, viewable.frame_out, reset_in_out=False)
-            self.clock.set_frame(viewable.frame_in)
-            self.cache.set_region_bounds(viewable.frame_in, viewable.frame_out)
+            start_f = viewable.start_frame
+            end_f = viewable.end_frame
+
             if viewable.media_type == "video" and viewable.path and os.path.exists(viewable.path):
                 self.audio_engine.load_audio(viewable.path)
             self.audio_engine.set_sequence_context(viewable.frame_in, viewable.fps)
@@ -3944,9 +4269,8 @@ class MainWindow(QMainWindow):
         elif isinstance(viewable, SequenceView):
             self.cache.set_active_source(None)
             self.clock.set_fps(viewable.fps)
-            self.clock.set_range(viewable.start_frame, viewable.end_frame, reset_in_out=False)
-            self.clock.set_frame(viewable.start_frame)
-            self.cache.set_region_bounds(viewable.start_frame, viewable.end_frame)
+            start_f = viewable.start_frame
+            end_f = viewable.end_frame
             self.comparison_state.mode = ComparisonMode.OFF
             self.viewport.comparison_state.mode = ComparisonMode.OFF
             self.viewport.set_reference_frame(None)
@@ -3992,16 +4316,12 @@ class MainWindow(QMainWindow):
             cur = viewable.get_current_layer(self.session_graph.sources)
             self.cache.set_active_source(cur.id if cur else None)
 
-            start_f = self.clock.start_frame
-            end_f = self.clock.end_frame
-            for sid in viewable.source_ids:
-                s = self.session_graph.sources.get(sid)
-                if s:
-                    start_f = min(start_f, s.frame_in)
-                    end_f = max(end_f, s.frame_out)
-            self.clock.set_range(start_f, end_f, reset_in_out=False)
-            self.clock.set_frame(start_f)
-            self.cache.set_region_bounds(start_f, end_f)
+            sources_list = [self.session_graph.sources[sid] for sid in viewable.source_ids if sid in self.session_graph.sources]
+            if sources_list:
+                start_f = min(s.start_frame for s in sources_list)
+                end_f = max(s.end_frame for s in sources_list)
+            else:
+                start_f, end_f = 1, 100
 
             from openreview.core.reader import CallableVirtualReader
             def _fetch_stack(f: int):
@@ -4048,27 +4368,20 @@ class MainWindow(QMainWindow):
             self.viewport.comparison_state.mode = ComparisonMode.OFF
             self.viewport.set_reference_frame(None)
             self.cache.set_active_source(None)
-            start_f = self.clock.start_frame
-            end_f = self.clock.end_frame
-            for sid in viewable.source_ids:
-                s = self.session_graph.sources.get(sid)
-                if s:
-                    start_f = min(start_f, s.frame_in)
-                    end_f = max(end_f, s.frame_out)
-            self.clock.set_range(start_f, end_f, reset_in_out=False)
-            self.clock.set_frame(start_f)
-            self.cache.set_region_bounds(start_f, end_f)
+
+            start_f, end_f = viewable.get_timeline_range(self.session_graph.sources)
 
             from openreview.core.reader import CallableVirtualReader
             def _fetch_layout(f: int):
                 def _fetch_tile(src: SourceItem):
-                    d = self.cache.get_source_frame(src.id, f)
+                    sf = viewable.resolve_tile_frame(src, f, self.session_graph.sources)
+                    d = self.cache.get_source_frame(src.id, sf)
                     if d is not None:
                         return d
                     r = self._get_reader_for_source(src)
-                    d = r.read_frame(f) if r else None
+                    d = r.read_frame(sf) if r else None
                     if self.cache.mode != CacheMode.OFF and d is not None:
-                        self.cache.put_source_frame(src.id, f, d)
+                        self.cache.put_source_frame(src.id, sf, d)
                     return d
                 return composite_layout_grid(
                     viewable,
@@ -4080,6 +4393,17 @@ class MainWindow(QMainWindow):
 
             self.setWindowTitle(f"OpenReview - Layout: {viewable.name} [{viewable.layout_type}, {viewable.scale_pct}% scale]")
             self.statusBar().showMessage(f"Active View: Layout '{viewable.name}' ({viewable.scale_pct}% scale)", 3000)
+
+        # Set range & restore or auto-expand In/Out marks
+        if viewable.manual_in is not None and viewable.manual_out is not None:
+            self.clock.set_range(start_f, end_f, reset_in_out=False)
+            self.clock.set_in_out(viewable.manual_in, viewable.manual_out)
+        else:
+            self.clock.set_range(start_f, end_f, reset_in_out=True)
+
+        self.clock.set_frame(start_f)
+        self.cache.set_region_bounds(start_f, end_f)
+        self._suppress_in_out_record = False
 
         if self.cache.mode != CacheMode.OFF:
             self.reader_engine.request_prefetch(
@@ -4117,8 +4441,6 @@ class MainWindow(QMainWindow):
                 self.viewport.update()
             else:
                 self._on_active_view_changed(self.session_graph.active_view_type.value, viewable.id)
-                if isinstance(viewable, SourceItem):
-                    self.clock.clear_in_out()
 
     def _on_step_clip_or_segment_next(self) -> None:
         """Step to next clip boundaries in Sequence view (PageDown), or next bookmark segment."""
@@ -4359,7 +4681,7 @@ class MainWindow(QMainWindow):
                     renderer = QSvgRenderer(str(logo_path))
                     if renderer.isValid():
                         dpr = dlg.devicePixelRatioF() if hasattr(dlg, "devicePixelRatioF") else 1.0
-                        target_w, target_h = 360, 76
+                        target_w, target_h = 400, 64
                         pix = QPixmap(int(target_w * dpr), int(target_h * dpr))
                         pix.setDevicePixelRatio(dpr)
                         pix.fill(Qt.GlobalColor.transparent)
@@ -4370,7 +4692,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pix = None
             if pix is None or pix.isNull():
-                pix = QPixmap(str(logo_path)).scaled(360, 76, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                pix = QPixmap(str(logo_path)).scaled(400, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             logo_lbl.setPixmap(pix)
             logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(logo_lbl)

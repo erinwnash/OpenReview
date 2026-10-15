@@ -11,7 +11,7 @@
   <header class="docs-header">
     <a href="index.html" class="brand">
       <span>Open<span class="accent">Review</span></span>
-      <span class="brand-meta">v0.1.0 • By Maruthu Chakravarthi</span>
+      <span class="brand-meta">v1.0.0 • By Maruthu Chakravarthi</span>
     </a>
     <ul class="nav-links">
       <li><a href="index.html" class="active">Application &amp; Architecture</a></li>
@@ -121,13 +121,15 @@
               <code>network/ipc_server.py</code><br>
               <code>network/sync_engine.py</code><br>
               <code>sdk/client.py</code>, <code>sdk/dcc.py</code><br>
-              <code>packages/package_manager.py</code>
+              <code>packages/package_manager.py</code><br>
+              <code>core/file_associations.py</code>
             </td>
             <td>
               <ul>
                 <li><strong>JSON-RPC 2.0 IPC Server (<code>IpcServer</code>):</strong> Listens asynchronously on <code>127.0.0.1:45124</code> via Qt's <code>QTcpServer</code> without blocking the GUI event loop. Dispatches external DCC commands (Nuke, Maya, Houdini, CLI) directly to <code>MainWindow</code>.</li>
                 <li><strong>Remote Dailies Sync (<code>DailiesSyncEngine</code>):</strong> Operates as either a multi-client TCP Host Server (default port <code>9090</code>) or Peer Client, broadcasting newline-delimited JSON state packets for frame sync, strokes, grades, and chat.</li>
                 <li><strong>Plugin Engine (<code>PackageManager</code>):</strong> Dynamically discovers, validates (<code>manifest.json</code>), and loads built-in and user plugins (<code>~/.openreview/packages</code>), dispatching lifecycle hooks (<code>on_media_loaded</code>, <code>on_frame_changed</code>, <code>on_annotation_added</code>).</li>
+                <li><strong>System File Associations (<code>FileAssociations</code>):</strong> Registers shell integration and MIME associations across Windows Registry and Linux XDG databases for double-click opening of <code>.exr</code>, <code>.dpx</code>, <code>.cin</code>, <code>.mov</code>, <code>.mp4</code>, and <code>.ovr</code>.</li>
               </ul>
             </td>
           </tr>
@@ -138,20 +140,25 @@
               <code>models/session_graph.py</code><br>
               <code>models/annotations.py</code><br>
               <code>core/clock.py</code><br>
-              <code>core/shortcuts.py</code>
+              <code>core/shortcuts.py</code><br>
+              <code>ui/console_dialog.py</code><br>
+              <code>ui/export_media_dialog.py</code>
             </td>
             <td>
               <ul>
-                <li><strong>MainWindow Orchestrator:</strong> Connects signals between the <code>PlaybackClock</code>, <code>SessionGraph</code>, <code>RingBufferCache</code>, <code>AudioEngine</code>, and <code>ViewportCanvas</code>.</li>
-                <li><strong>Hierarchical SessionGraph:</strong> Manages Loaded Sources, nested Folders/Bins, Editorial Sequences (EDL-style back-to-back playlists), Multi-Layer Stacks, and Tiled Contact Sheet Layouts.</li>
-                <li><strong>PlaybackClock:</strong> High-precision monotonic timer driving forward/reverse playback, JKL variable shuttle speeds (<code>-8x</code> to <code>+8x</code>), loop modes (Loop, Ping-Pong, Once), In/Out clamping, and frame bookmarks.</li>
-                <li><strong>ShortcutManager:</strong> Singleton event filter intercepting application-wide keypresses with automatic suppression when typing in text editors or spinboxes.</li>
+                <li><strong>MainWindow Orchestrator:</strong> Connects signals between the <code>PlaybackClock</code>, <code>SessionGraph</code>, <code>RingBufferCache</code>, <code>AudioEngine</code>, and <code>ViewportCanvas</code>. Features low-resolution 1920x1080 display adaptation and Windows taskbar suppression during Fullscreen (<span class="key-badge">F12</span>) and Presentation (<span class="key-badge">Ctrl+P</span>).</li>
+                <li><strong>Hierarchical SessionGraph:</strong> Manages Loaded Sources, nested Folders/Bins, Editorial Sequences (EDL-style back-to-back playlists), Multi-Layer Stacks, and Tiled Contact Sheet Layouts with instant Close &amp; Clear Session (<span class="key-badge">Ctrl+Shift+N</span>).</li>
+                <li><strong>PlaybackClock:</strong> High-precision monotonic timer driving forward/reverse playback, JKL variable shuttle speeds (<code>-8x</code> to <code>+8x</code>), loop modes, In/Out clamping, and frame bookmarks.</li>
+                <li><strong>Live Diagnostics Console (<code>ConsoleDialog</code>):</strong> Real-time capture of stdout/stderr, plugin exceptions, and OCIO diagnostic messages with severity filtering and automatic error popup (<span class="key-badge">Ctrl+Shift+L</span>).</li>
+                <li><strong>Media Export Engine:</strong> High-performance rendering of frames, sequences, and annotations to EXR, QuickTime MOV (ProRes, DNxHD, H.264), DPX, TIFF, and PNG with downrez scaling and colorspace conversion (<span class="key-badge">Ctrl+Shift+E</span>).</li>
+                <li><strong>ShortcutManager:</strong> Centralized registry managing 80+ hotkeys with JSON persistence in <code>~/.openreview/preferences.json</code> and conflict detection.</li>
               </ul>
             </td>
           </tr>
           <tr>
-            <td><strong>Layer 3: Asynchronous Media I/O, RAM Cache &amp; Audio Engine</strong></td>
+            <td><strong>Layer 3: Asynchronous Media I/O, Two-Tier Caching &amp; Audio Engine</strong></td>
             <td>
+              <code>core/async_source_loader.py</code><br>
               <code>core/reader.py</code><br>
               <code>core/image_io.py</code><br>
               <code>core/video_reader.py</code><br>
@@ -160,10 +167,17 @@
             </td>
             <td>
               <ul>
-                <li><strong>ReaderEngine &amp; Thread Pool:</strong> Uses a configurable pool of background worker threads (default 6 threads) to decode frames ahead of the playhead based on playback direction.</li>
-                <li><strong>Sequence Parser (<code>sequence_parser.py</code>):</strong> Automatically detects frame padding patterns (<code>sh010.####.exr</code>, <code>%04d</code>), start/end frame bounds, and missing/dropped frames on disk.</li>
-                <li><strong>RingBufferCache:</strong> Thread-safe, memory-bounded LRU/windowed frame store supporting four operational modes: <code>Off</code>, <code>Play-Ahead</code>, <code>In/Out Region</code>, and <code>Cache All</code>.</li>
-                <li><strong>AudioEngine:</strong> Synchronizes external or embedded audio streams to the video clock with sub-frame drift correction and 60ms scrubbing audio bursts.</li>
+                <li><strong>AsyncSourceLoader:</strong> Non-blocking background worker queueing heavy multi-part EXRs and media containers without stalling the UI thread, complete with cancellation tokens and progress notifications.</li>
+                <li><strong>Two-Tier Caching System (<code>core/cache.py</code>):</strong>
+                  <ul>
+                    <li><strong>Tier 1 — RAM RingBufferCache:</strong> Dynamic circular memory buffer (1 GB to 64 GB) implementing <code>Play-Ahead</code>, <code>In/Out Region</code> (<span class="key-badge">Shift+C</span>), and <code>Cache All</code> strategies with directional lookahead windowing.</li>
+                    <li><strong>Tier 2 — Persistent DiskCache:</strong> Disk-backed frame serialization utilizing fast LZ4/Zstandard compression in <code>~/.openreview/cache</code>, caching pre-decoded frames beyond physical RAM bounds.</li>
+                    <li><strong>Eviction Shortcuts:</strong> Flush active clip RAM cache (<span class="key-badge">Ctrl+Shift+C</span>) or purge all source caches across the entire session (<span class="key-badge">Ctrl+Delete</span>).</li>
+                  </ul>
+                </li>
+                <li><strong>ReaderEngine &amp; Thread Pool:</strong> Pool of background worker threads (default 6 threads) decoding frames ahead of the playhead.</li>
+                <li><strong>Sequence Parser (<code>sequence_parser.py</code>):</strong> Automatically detects frame padding patterns (<code>sh010.####.exr</code>, <code>%04d</code>), frame bounds, and missing frames on disk.</li>
+                <li><strong>AudioEngine:</strong> Synchronizes external or embedded audio streams to the video clock with 45ms drift correction and 60ms scrubbing audio bursts.</li>
               </ul>
             </td>
           </tr>
@@ -172,19 +186,16 @@
             <td>
               <code>widgets/viewport.py</code><br>
               <code>color/shader_builder.py</code><br>
-              <code>color/ocio_manager.py</code><br>
-              <code>color/lut_manager.py</code>
+              <code>core/exr_contact_sheet.py</code><br>
+              <code>widgets/hud_layers.py</code><br>
+              <code>color/ocio_manager.py</code>
             </td>
             <td>
               <ul>
-                <li><strong>ViewportCanvas (<code>QOpenGLWidget</code>):</strong> Renders dual high-bit-depth textures (Primary Slot A and Reference Slot B) plus a 3D hardware LUT texture (<code>GL_TEXTURE_3D</code>).</li>
-                <li><strong>Three Selectable Playback Engines:</strong>
-                  <ol>
-                    <li><code>opengl_core</code> — Direct OpenGL 3.3 Core Profile texture streaming.</li>
-                    <li><code>async_pbo</code> — Double-buffered OpenGL Pixel Buffer Object (DMA) asynchronous transfers for zero CPU stall on 4K/8K frames.</li>
-                    <li><code>software_safe</code> — Safe fallback rasterizer for remote desktop / VM environments without hardware GL drivers.</li>
-                  </ol>
-                </li>
+                <li><strong>ViewportCanvas (<code>QOpenGLWidget</code>):</strong> Renders dual high-bit-depth textures (Primary Slot A and Reference Slot B) plus a 3D hardware LUT texture (<code>GL_TEXTURE_3D</code>). Supports <code>opengl_core</code>, <code>async_pbo</code> (DMA streaming), and <code>software_safe</code>.</li>
+                <li><strong>9-Stage GLSL Color Pipeline:</strong> 32-bit float fragment shader executing real-time color space conversion, exposure, gain, CDL, 3D LUTs, OCIO v2, inversion (<span class="key-badge">Shift+I</span>), and out-of-range zebra analysis.</li>
+                <li><strong>EXR Multi-Layer Contact Sheet:</strong> Automated tiling of all AOVs (Diffuse, Specular, Normal, Cryptomatte, Depth) into a multi-part contact sheet matrix.</li>
+                <li><strong>Pixel Analyzer &amp; Area Sampler:</strong> Eyedropper area analyzer computing real-time Min, Max, Average, and Median statistics with NaN/Inf/Negative detection and color swatches (<span class="key-badge">F5</span> / <span class="key-badge">Alt+C</span>).</li>
               </ul>
             </td>
           </tr>
@@ -392,6 +403,7 @@
             <li><strong>Bookmark &amp; Annotation Ticks:</strong> Distinct colored markers for bookmarked frames (<span class="key-badge">M</span>, navigated with <span class="key-badge">Alt+Left</span> / <span class="key-badge">Alt+Right</span>) and annotated keyframes (navigated with <span class="key-badge">,</span> / <span class="key-badge">.</span>).</li>
           </ul>
         </li>
+        <li><strong>Total Frame Count &amp; In/Out Duration Indicator:</strong> High-visibility telemetry label placed right before the Clear In/Out button. Dynamically displays the total sequence length (e.g. <code>Total: 150 frames</code>), and when an In/Out region is marked, automatically switches to display the exact duration of the selected playback window (e.g. <code>Selected: 48 frames</code>).</li>
         <li><strong>Timeline Zoom &amp; Magnifier (<span class="key-badge">Shift+T</span>):</strong> Zoom into long 5,000+ frame editorial timelines using <span class="key-badge">Ctrl+=</span> / <span class="key-badge">Ctrl+-</span> or toggle the <strong>Magnified Timeline Scrub Mini-Ruler</strong> (<span class="key-badge">Shift+T</span>) for single-frame precision.</li>
       </ul>
 
@@ -444,12 +456,14 @@
         <img src="assets/screenshots/hud_color_inspector.png" alt="Pixel Color Inspector HUD Screenshot">
         <div class="panel-details">
           <h3>3.2 Pixel Color Inspector &amp; Area Analyzer HUD (<span class="key-badge">F5</span> / <span class="key-badge">Alt+C</span>)</h3>
-          <p>Module: <code>widgets/hud_color_inspector.py</code></p>
+          <p>Module: <code>widgets/hud_color_inspector.py</code>, <code>widgets/hud_layers.py</code></p>
           <ul>
             <li><strong>Live Cursor Probe:</strong> Displays color-coded 32-bit floating-point <code>RGBA</code>, 8-bit <code>0–255</code> integers, <code>HSV</code>, Hex code, and Rec.709 Luminance (<code>Y</code>) with a split color swatch.</li>
             <li><strong>Aperture Sampling Size:</strong> Sample a single <code>1x1</code> pixel or average across <code>3x3</code>, <code>5x5</code>, or <code>9x9</code> pixel neighborhoods to filter out film grain noise.</li>
-            <li><strong>Persistent Pinned Samplers &amp; Area Box Regions:</strong> Pin up to 8 numbered sample points or drag rectangular area sample boxes on the canvas to monitor Min, Max, and Mean RGBA values across frames.</li>
-            <li><strong>NaN / Inf / Negative Pixel Diagnostics:</strong> Dedicated badge counters alert compositors immediately if a CG render contains corrupted <code>NaN</code>, <code>Infinity</code>, or negative sub-zero pixel values.</li>
+            <li><strong>Eyedropper Area Pixel Analyzer:</strong> Drag a marquee selection anywhere on the canvas or pin rectangular sample boxes. Analyzes real-time statistical distributions across the entire region: <strong>Minimum</strong>, <strong>Maximum</strong>, <strong>Average</strong>, and <strong>Median</strong> float values.</li>
+            <li><strong>Live Swatch Thumbnail Previews:</strong> Provides dedicated color swatch preview chips for the calculated Minimum, Maximum, Average, and Median values, allowing instant visual validation of contrast and color drift.</li>
+            <li><strong>Floating-Point Error &amp; Out-of-Gamut Detection:</strong> Automatically scans and counts non-compliant pixels: <code>NaN</code> (Not a Number), <code>Inf</code> (Infinity), and negative sub-zero values (<code>&lt; 0.0</code>) with direct visual badges.</li>
+            <li><strong>Persistent Pinned Samplers:</strong> Pin up to 8 numbered sample points across the frame to track color consistency across shots or composite iterations.</li>
           </ul>
         </div>
       </div>
@@ -566,7 +580,7 @@
       <div class="card-grid-2">
         <figure class="doc-figure" style="margin:0;">
           <img src="assets/screenshots/dialog_export_media.png" alt="Export Media Dialog Screenshot">
-          <figcaption><strong>Figure 4.1: Export Media Dialog (<span class="key-badge">Ctrl+Shift+E</span>)</strong> — Render active sequences, In/Out ranges, Bookmarked frames, or Annotated keyframes to Apple ProRes / H.264 <code>.mov</code>, <code>PNG</code> sequences, <code>JPEG</code> sequences, or single-frame snapshots with optional <strong>Burn-In Annotations &amp; Color Grading</strong>.</figcaption>
+          <figcaption><strong>Figure 4.1: Studio Media Export Dialog (<span class="key-badge">Ctrl+Shift+E</span>)</strong> — Render frames or sequences to 16/32-bit OpenEXR, QuickTime MOV (Apple ProRes 422/4444, Avid DNxHD, H.264), 10/12-bit DPX, 16-bit TIFF, PNG, or JPEG. Supports downrez resolution scaling (100%, 50%, 25%, Custom), colorspace transformations, and burned-in review annotations.</figcaption>
         </figure>
         <figure class="doc-figure" style="margin:0;">
           <img src="assets/screenshots/dialog_package_manager.png" alt="Package and Plugin Manager Dialog Screenshot">
@@ -714,6 +728,30 @@ target_ms = max(0, int(round(rel_seconds * 1000.0)))</code></pre>
             <td>Percentage of cache window retained behind the playhead for reverse stepping.</td>
           </tr>
           <tr>
+            <td><code>disk_cache_enabled</code></td>
+            <td><code>bool</code></td>
+            <td><code>true</code></td>
+            <td>Enables Tier 2 persistent binary disk caching for large image sequences.</td>
+          </tr>
+          <tr>
+            <td><code>disk_cache_dir</code></td>
+            <td><code>str</code></td>
+            <td><code>"~/.openreview/cache"</code></td>
+            <td>Custom filesystem directory for cached frame binary chunks.</td>
+          </tr>
+          <tr>
+            <td><code>disk_cache_limit_gb</code></td>
+            <td><code>float</code></td>
+            <td><code>32.0</code></td>
+            <td>Maximum disk storage quota in Gigabytes before automated LRU eviction.</td>
+          </tr>
+          <tr>
+            <td><code>auto_open_console_on_error</code></td>
+            <td><code>bool</code></td>
+            <td><code>true</code></td>
+            <td>Automatically brings the Diagnostic Console Window to the front when an unhandled error is logged.</td>
+          </tr>
+          <tr>
             <td><code>playback_texture_mode</code></td>
             <td><code>str</code></td>
             <td><code>"auto"</code></td>
@@ -774,7 +812,7 @@ target_ms = max(0, int(round(rel_seconds * 1000.0)))</code></pre>
   </div>
 
   <footer class="docs-footer">
-    <strong>OpenReview v0.1.0</strong> &bull; Authored by <strong>Maruthu Chakravarthi</strong> &bull; Professional VFX Review &amp; Playback Workstation Documentation
+    <strong>OpenReview v1.0.0</strong> &bull; Authored by <strong>Maruthu Chakravarthi</strong> &bull; Professional VFX Review &amp; Playback Workstation Documentation
   </footer>
 
 </body>

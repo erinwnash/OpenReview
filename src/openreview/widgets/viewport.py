@@ -106,6 +106,7 @@ class ViewportCanvas(QOpenGLWidget):
     exit_fullscreen_requested = Signal()
     toggle_fullscreen_requested = Signal()
     draw_tool_changed = Signal(object)  # Optional[ShapeType]
+    contact_sheet_tile_double_clicked = Signal(str)  # emits clicked layer name in contact sheet mode
 
     def __init__(
         self,
@@ -259,6 +260,16 @@ class ViewportCanvas(QOpenGLWidget):
         self._toast_timer: Optional[QTimer] = None
         self._is_playing: bool = False
 
+        # Multi-Channel EXR Contact Sheet Mode State
+        self._contact_sheet_mode: bool = False
+        self._contact_sheet_tile_map: dict[str, Tuple[int, int, int, int]] = {}
+
+    def set_contact_sheet_mode(self, enabled: bool, tile_map: Optional[dict] = None) -> None:
+        """Configure active contact sheet mode and coordinate hit-test tile map."""
+        self._contact_sheet_mode = enabled
+        self._contact_sheet_tile_map = tile_map or {}
+        self.update()
+
     def set_is_playing(self, playing: bool) -> None:
         """Inform viewport of active playback state to enable low-latency proxy streaming."""
         was_playing = self._is_playing
@@ -385,7 +396,7 @@ class ViewportCanvas(QOpenGLWidget):
         elif self.background_mode == "checker":
             gl.glClearColor(0.12, 0.12, 0.12, 1.0)
         else:  # "black" default
-            gl.glClearColor(0.05, 0.05, 0.05, 1.0)
+            gl.glClearColor(0.0, 0.0, 0.0, 1.0)
         gl.glClear(0x00004000)  # GL_COLOR_BUFFER_BIT
 
         # If checkerboard background mode, draw full-screen checkerboard pattern in OpenGL first
@@ -1458,6 +1469,21 @@ class ViewportCanvas(QOpenGLWidget):
                 self.wipe_position_changed.emit(self.comparison_state.wipe_position)
                 self.wipe_angle_changed.emit(self.comparison_state.wipe_angle_deg)
                 self.update()
+                event.accept()
+                return
+
+        # Multi-Channel EXR Contact Sheet Tile Soloing
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and getattr(self, "_contact_sheet_mode", False)
+            and getattr(self, "_contact_sheet_tile_map", None)
+        ):
+            pos = event.position()
+            ix, iy = self._screen_to_image_coords(pos.x(), pos.y())
+            from openreview.core.exr_contact_sheet import hit_test_contact_sheet
+            hit_layer = hit_test_contact_sheet(ix, iy, self._contact_sheet_tile_map)
+            if hit_layer:
+                self.contact_sheet_tile_double_clicked.emit(hit_layer)
                 event.accept()
                 return
 

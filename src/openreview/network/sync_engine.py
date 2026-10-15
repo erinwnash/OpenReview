@@ -555,7 +555,7 @@ class DailiesSyncEngine(QObject):
         """Host or presenter delegates presenter control to a specific peer."""
         if not self.is_connected or not target_username:
             return
-        clean_user = target_username.replace(" (Host)", "").replace(" 👑", "").strip()
+        clean_user = target_username.replace(" (Host)", "").replace(" [Presenter]", "").replace(" \U0001f451", "").strip()
         self._presenter = clean_user
         self._send_raw_message({
             "type": "PRESENTER_ASSIGN",

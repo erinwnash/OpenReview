@@ -5,6 +5,9 @@ Styled with 3DEqualizer dark studio aesthetic.
 """
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 from typing import Optional, Dict
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeyEvent, QKeySequence, QColor
@@ -302,6 +305,28 @@ class PreferencesDialog(QDialog):
         perf_form.addRow("", self.chk_laptop_mode)
 
         gen_layout.addWidget(grp_perf)
+
+        # OS File Associations Group
+        grp_assoc = QGroupBox("Operating System File Associations")
+        assoc_layout = QVBoxLayout(grp_assoc)
+        assoc_layout.setSpacing(6)
+        lbl_assoc_info = QLabel("Associate OpenReview with .ovr session files and add 'Open with OpenReview' in Windows Explorer.")
+        lbl_assoc_info.setStyleSheet("color: #888888; font-size: 11px;")
+        assoc_layout.addWidget(lbl_assoc_info)
+
+        assoc_btn_row = QHBoxLayout()
+        self.btn_register_assoc = QPushButton("Register File Associations")
+        self.btn_register_assoc.clicked.connect(self._on_register_file_associations_clicked)
+        self.btn_unregister_assoc = QPushButton("Unregister")
+        self.btn_unregister_assoc.clicked.connect(self._on_unregister_file_associations_clicked)
+        self.lbl_assoc_status = QLabel("")
+        assoc_btn_row.addWidget(self.btn_register_assoc)
+        assoc_btn_row.addWidget(self.btn_unregister_assoc)
+        assoc_btn_row.addWidget(self.lbl_assoc_status)
+        assoc_btn_row.addStretch()
+        assoc_layout.addLayout(assoc_btn_row)
+        gen_layout.addWidget(grp_assoc)
+
         gen_layout.addStretch()
 
         self.tabs.addTab(tab_general, "General & Playback")
@@ -442,6 +467,24 @@ class PreferencesDialog(QDialog):
         self.spin_behind_pct.setRange(0, 100)
         self.spin_behind_pct.setSuffix(" %")
         cache_form.addRow("Portion of Look Ahead Behind Playhead:", self.spin_behind_pct)
+
+        # Tier-2 Temp Drive Disk Caching
+        self.chk_enable_disk_cache = QCheckBox("Enable High-Capacity Temp Drive Disk Cache (Tier-2)")
+        self.chk_enable_disk_cache.setToolTip(
+            "Store and spill cached frames to temporary drive to cache more sources without exhausting RAM"
+        )
+        cache_form.addRow("Temp Drive Cache:", self.chk_enable_disk_cache)
+
+        self.spin_disk_cache_gb = QDoubleSpinBox()
+        self.spin_disk_cache_gb.setRange(1.0, 500.0)
+        self.spin_disk_cache_gb.setSingleStep(5.0)
+        self.spin_disk_cache_gb.setSuffix(" GB")
+        cache_form.addRow("Disk Cache Budget:", self.spin_disk_cache_gb)
+
+        self.btn_clear_disk_cache = QPushButton("Clear Temp Disk Cache Now")
+        self.btn_clear_disk_cache.setToolTip("Immediately purges all temporary cached frames from disk")
+        self.btn_clear_disk_cache.clicked.connect(self._on_clear_disk_cache_clicked)
+        cache_form.addRow("Disk Maintenance:", self.btn_clear_disk_cache)
 
         cache_layout.addLayout(cache_form)
         cache_layout.addStretch()
@@ -738,10 +781,51 @@ class PreferencesDialog(QDialog):
         self.spin_lookahead_gb.setValue(p.lookahead_cache_gb)
         self.spin_region_gb.setValue(p.region_cache_gb)
         self.spin_behind_pct.setValue(int(p.lookahead_behind_pct))
+        self.chk_enable_disk_cache.setChecked(getattr(p, "enable_disk_cache", True))
+        self.spin_disk_cache_gb.setValue(getattr(p, "max_disk_cache_gb", 20.0))
+        self._update_assoc_status()
 
     def _on_auto_ram_budget_toggled(self, checked: bool) -> None:
         self.spin_lookahead_gb.setEnabled(not checked)
         self.spin_region_gb.setEnabled(not checked)
+
+    def _on_clear_disk_cache_clicked(self) -> None:
+        try:
+            base_temp = os.path.join(tempfile.gettempdir(), "OpenReview_Cache")
+            if os.path.exists(base_temp):
+                shutil.rmtree(base_temp, ignore_errors=True)
+            os.makedirs(base_temp, exist_ok=True)
+            parent = self.parent()
+            if parent and hasattr(parent, "cache") and hasattr(parent.cache, "disk_cache") and parent.cache.disk_cache:
+                parent.cache.disk_cache.clear()
+            QMessageBox.information(self, "Disk Cache Cleared", "Temporary disk cache files have been purged.")
+        except Exception as e:
+            QMessageBox.warning(self, "Clear Failed", f"Failed to clear disk cache: {e}")
+
+    def _update_assoc_status(self) -> None:
+        try:
+            from openreview.core.file_associations import is_file_association_registered
+            if is_file_association_registered():
+                self.lbl_assoc_status.setText("<span style='color: #2ecc71; font-weight: bold;'>● Registered</span>")
+            else:
+                self.lbl_assoc_status.setText("<span style='color: #888888;'>○ Not registered</span>")
+        except Exception:
+            pass
+
+    def _on_register_file_associations_clicked(self) -> None:
+        from openreview.core.file_associations import register_file_associations
+        success = register_file_associations()
+        self._update_assoc_status()
+        if success:
+            QMessageBox.information(self, "Associations Registered", "OpenReview session files (.ovr) and media formats successfully associated with Windows Explorer.")
+        else:
+            QMessageBox.warning(self, "Registration Notice", "File associations could not be written to registry. Please check permissions.")
+
+    def _on_unregister_file_associations_clicked(self) -> None:
+        from openreview.core.file_associations import unregister_file_associations
+        unregister_file_associations()
+        self._update_assoc_status()
+        QMessageBox.information(self, "Associations Removed", "OpenReview file associations have been removed from Windows Explorer.")
 
     def _gather_prefs(self) -> UserPreferences:
         return UserPreferences(
@@ -755,6 +839,8 @@ class PreferencesDialog(QDialog):
             lookahead_cache_gb=self.spin_lookahead_gb.value(),
             region_cache_gb=self.spin_region_gb.value(),
             lookahead_behind_pct=float(self.spin_behind_pct.value()),
+            enable_disk_cache=self.chk_enable_disk_cache.isChecked(),
+            max_disk_cache_gb=self.spin_disk_cache_gb.value(),
             playback_texture_mode=self.combo_texture_mode.currentData(),
             prefetch_buffer_size=self.spin_prefetch_buffer.value(),
             prefetch_worker_threads=self.spin_prefetch_threads.value(),

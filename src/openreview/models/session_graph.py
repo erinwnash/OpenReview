@@ -44,6 +44,8 @@ class SourceItem:
     parent_folder_id: Optional[str] = None
     orig_start_frame: Optional[int] = None
     orig_end_frame: Optional[int] = None
+    manual_in: Optional[int] = None
+    manual_out: Optional[int] = None
 
     def __post_init__(self):
         if self.orig_start_frame is None:
@@ -57,6 +59,13 @@ class SourceItem:
             self.start_frame = self.orig_start_frame
         if self.orig_end_frame is not None:
             self.end_frame = self.orig_end_frame
+        self.manual_in = None
+        self.manual_out = None
+
+    @property
+    def file_path(self) -> str:
+        """Alias for path attribute for seamless compatibility across readers and UI panels."""
+        return self.path
 
     @property
     def duration(self) -> int:
@@ -92,6 +101,8 @@ class SourceItem:
             "end_frame": self.end_frame,
             "orig_start_frame": self.orig_start_frame,
             "orig_end_frame": self.orig_end_frame,
+            "manual_in": self.manual_in,
+            "manual_out": self.manual_out,
             "fps": self.fps,
             "width": self.width,
             "height": self.height,
@@ -104,6 +115,8 @@ class SourceItem:
     def from_dict(cls, data: Dict[str, Any]) -> SourceItem:
         sf = int(data.get("start_frame", 1001))
         ef = int(data.get("end_frame", 1200))
+        m_in = data.get("manual_in")
+        m_out = data.get("manual_out")
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", "Media"),
@@ -119,6 +132,8 @@ class SourceItem:
             parent_folder_id=data.get("parent_folder_id"),
             orig_start_frame=int(data.get("orig_start_frame", sf)),
             orig_end_frame=int(data.get("orig_end_frame", ef)),
+            manual_in=int(m_in) if m_in is not None else None,
+            manual_out=int(m_out) if m_out is not None else None,
         )
 
 
@@ -202,6 +217,8 @@ class SequenceView:
     start_frame: int = 1001
     fps: float = 24.0
     parent_folder_id: Optional[str] = None
+    manual_in: Optional[int] = None
+    manual_out: Optional[int] = None
 
     @property
     def total_duration(self) -> int:
@@ -255,10 +272,14 @@ class SequenceView:
             "start_frame": self.start_frame,
             "fps": self.fps,
             "parent_folder_id": self.parent_folder_id,
+            "manual_in": self.manual_in,
+            "manual_out": self.manual_out,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> SequenceView:
+        m_in = data.get("manual_in")
+        m_out = data.get("manual_out")
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", "Sequence"),
@@ -266,6 +287,8 @@ class SequenceView:
             start_frame=int(data.get("start_frame", 1001)),
             fps=float(data.get("fps", 24.0)),
             parent_folder_id=data.get("parent_folder_id"),
+            manual_in=int(m_in) if m_in is not None else None,
+            manual_out=int(m_out) if m_out is not None else None,
         )
 
 
@@ -286,6 +309,8 @@ class StackView:
     parent_folder_id: Optional[str] = None
     stack_mix: float = 1.0
     channels_a: Tuple[bool, bool, bool, bool] = (True, True, True, True)
+    manual_in: Optional[int] = None
+    manual_out: Optional[int] = None
 
     def cycle_forward(self) -> int:
         """Cycle to next layer in stack. Returns new current layer index."""
@@ -351,12 +376,16 @@ class StackView:
             "parent_folder_id": self.parent_folder_id,
             "stack_mix": self.stack_mix,
             "channels_a": list(self.channels_a),
+            "manual_in": self.manual_in,
+            "manual_out": self.manual_out,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> StackView:
         ch_raw = data.get("channels_a", [True, True, True, True])
         ch_tuple = (bool(ch_raw[0]), bool(ch_raw[1]), bool(ch_raw[2]), bool(ch_raw[3])) if len(ch_raw) >= 4 else (True, True, True, True)
+        m_in = data.get("manual_in")
+        m_out = data.get("manual_out")
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", "Default Stack"),
@@ -364,13 +393,15 @@ class StackView:
             index_a=int(data.get("index_a", 0)),
             index_b=int(data.get("index_b", 1)),
             current_layer_index=int(data.get("current_layer_index", 0)),
-            compare_mode=data.get("compare_mode", "wipe"),
+            compare_mode=data.get("compare_mode", "over"),
             wipe_position=float(data.get("wipe_position", 0.5)),
             wipe_angle_deg=float(data.get("wipe_angle_deg", 0.0)),
             diff_boost=float(data.get("diff_boost", 1.0)),
             parent_folder_id=data.get("parent_folder_id"),
             stack_mix=float(data.get("stack_mix", 1.0)),
             channels_a=ch_tuple,
+            manual_in=int(m_in) if m_in is not None else None,
+            manual_out=int(m_out) if m_out is not None else None,
         )
 
 
@@ -383,6 +414,9 @@ class LayoutView:
     layout_type: str = "auto_grid"  # "auto_grid", "side_by_side", "over_under", "grid_2x2", "grid_3x3"
     scale_pct: int = 100  # 100, 50, 25, 10
     parent_folder_id: Optional[str] = None
+    align_mode: str = "frame_1"  # "frame_1", "min_source", "native"
+    manual_in: Optional[int] = None
+    manual_out: Optional[int] = None
 
     def get_grid_dimensions(self) -> Tuple[int, int]:
         """Calculate (rows, cols) based on input count and layout type."""
@@ -411,6 +445,34 @@ class LayoutView:
         rows = math.ceil(n / cols)
         return rows, cols
 
+    def get_timeline_range(self, sources_map: Dict[str, SourceItem]) -> Tuple[int, int]:
+        """Return (start_frame, end_frame) for the layout timeline based on align_mode."""
+        sources = [sources_map[sid] for sid in self.source_ids if sid in sources_map]
+        if not sources:
+            return 1, 100
+
+        max_dur = max(s.duration for s in sources)
+        min_start = min(s.start_frame for s in sources)
+
+        if self.align_mode == "min_source":
+            return min_start, min_start + max_dur - 1
+        elif self.align_mode == "native":
+            max_end = max(s.end_frame for s in sources)
+            return min_start, max_end
+        else:  # "frame_1" (default)
+            return 1, max_dur
+
+    def resolve_tile_frame(self, src: SourceItem, timeline_frame: int, sources_map: Dict[str, SourceItem]) -> int:
+        """Resolve the source frame for a tile at the given timeline frame."""
+        if self.align_mode == "native":
+            return timeline_frame
+
+        start_f, _ = self.get_timeline_range(sources_map)
+        offset = timeline_frame - start_f
+        tile_frame = src.start_frame + offset
+        # Clamp to media bounds so shorter clips hold their last frame
+        return max(src.start_frame, min(src.end_frame, tile_frame))
+
     def move_tile(self, from_idx: int, to_idx: int) -> None:
         if 0 <= from_idx < len(self.source_ids) and 0 <= to_idx < len(self.source_ids):
             sid = self.source_ids.pop(from_idx)
@@ -428,10 +490,15 @@ class LayoutView:
             "layout_type": self.layout_type,
             "scale_pct": self.scale_pct,
             "parent_folder_id": self.parent_folder_id,
+            "align_mode": self.align_mode,
+            "manual_in": self.manual_in,
+            "manual_out": self.manual_out,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> LayoutView:
+        m_in = data.get("manual_in")
+        m_out = data.get("manual_out")
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", "Layout"),
@@ -439,6 +506,9 @@ class LayoutView:
             layout_type=data.get("layout_type", "auto_grid"),
             scale_pct=int(data.get("scale_pct", 100)),
             parent_folder_id=data.get("parent_folder_id"),
+            align_mode=data.get("align_mode", "frame_1"),
+            manual_in=int(m_in) if m_in is not None else None,
+            manual_out=int(m_out) if m_out is not None else None,
         )
 
 
@@ -482,6 +552,92 @@ def detect_media_colorspace(file_path: str, ext: str) -> str:
         pass
 
     return "sRGB (Texture/Video)"
+
+
+def build_source_item_from_path(path: str, parent_folder_id: Optional[str] = None) -> Optional[SourceItem]:
+    """
+    Inspect media file or sequence on disk and build a SourceItem.
+    Thread-safe function suitable for background worker execution.
+    """
+    if not path or not os.path.exists(path):
+        return None
+
+    name = os.path.basename(path)
+    ext = os.path.splitext(path)[1].lower()
+
+    # Image sequence
+    seq_info = detect_image_sequence(path)
+    if seq_info and len(seq_info.available_frames) > 1:
+        pat_name = f"{seq_info.prefix}{seq_info.separator}{'#' * seq_info.padding}{seq_info.extension}"
+        first_frame_path = seq_info.frame_path(seq_info.start_frame) if hasattr(seq_info, "frame_path") else path
+        cs = detect_media_colorspace(first_frame_path, seq_info.extension)
+        return SourceItem(
+            name=pat_name,
+            path=path,
+            media_type="sequence",
+            start_frame=seq_info.start_frame,
+            end_frame=seq_info.end_frame,
+            fps=24.0,
+            width=1920,
+            height=1080,
+            colorspace=cs,
+            codec="Image Sequence",
+            parent_folder_id=parent_folder_id,
+        )
+    elif is_video_file(path):
+        cs = detect_media_colorspace(path, ext)
+        try:
+            reader = VideoMediaReader(path)
+            return SourceItem(
+                name=name,
+                path=path,
+                media_type="video",
+                start_frame=1,
+                end_frame=reader.total_frames,
+                fps=reader.fps,
+                width=reader.width,
+                height=reader.height,
+                colorspace=cs,
+                codec="Video",
+                parent_folder_id=parent_folder_id,
+            )
+        except Exception:
+            return SourceItem(
+                name=name,
+                path=path,
+                media_type="video",
+                start_frame=1,
+                end_frame=100,
+                fps=24.0,
+                colorspace=cs,
+                parent_folder_id=parent_folder_id,
+            )
+    elif ext in (".wav", ".mp3", ".aac", ".flac", ".ogg", ".aiff", ".m4a"):
+        return SourceItem(
+            name=name,
+            path=path,
+            media_type="audio",
+            start_frame=1,
+            end_frame=1,
+            fps=24.0,
+            colorspace="Raw",
+            codec="Audio",
+            parent_folder_id=parent_folder_id,
+        )
+    else:
+        # Still image or general file
+        cs = detect_media_colorspace(path, ext)
+        return SourceItem(
+            name=name,
+            path=path,
+            media_type="still",
+            start_frame=1001,
+            end_frame=1001,
+            fps=24.0,
+            colorspace=cs,
+            codec="Still Image",
+            parent_folder_id=parent_folder_id,
+        )
 
 
 class SessionGraph(QObject):
@@ -528,82 +684,9 @@ class SessionGraph(QObject):
             if os.path.normpath(s.path) == norm_path:
                 return s
 
-        name = os.path.basename(path)
-        ext = os.path.splitext(path)[1].lower()
-
-        # Image sequence
-        seq_info = detect_image_sequence(path)
-        if seq_info and len(seq_info.available_frames) > 1:
-            pat_name = f"{seq_info.prefix}{seq_info.separator}{'#' * seq_info.padding}{seq_info.extension}"
-            first_frame_path = seq_info.frame_path(seq_info.start_frame) if hasattr(seq_info, "frame_path") else path
-            cs = detect_media_colorspace(first_frame_path, seq_info.extension)
-            source = SourceItem(
-                name=pat_name,
-                path=path,
-                media_type="sequence",
-                start_frame=seq_info.start_frame,
-                end_frame=seq_info.end_frame,
-                fps=24.0,
-                width=1920,
-                height=1080,
-                colorspace=cs,
-                codec="Image Sequence",
-                parent_folder_id=parent_folder_id,
-            )
-        elif is_video_file(path):
-            cs = detect_media_colorspace(path, ext)
-            try:
-                reader = VideoMediaReader(path)
-                source = SourceItem(
-                    name=name,
-                    path=path,
-                    media_type="video",
-                    start_frame=1,
-                    end_frame=reader.total_frames,
-                    fps=reader.fps,
-                    width=reader.width,
-                    height=reader.height,
-                    colorspace=cs,
-                    codec="Video",
-                    parent_folder_id=parent_folder_id,
-                )
-            except Exception:
-                source = SourceItem(
-                    name=name,
-                    path=path,
-                    media_type="video",
-                    start_frame=1,
-                    end_frame=100,
-                    fps=24.0,
-                    colorspace=cs,
-                    parent_folder_id=parent_folder_id,
-                )
-        elif ext in (".wav", ".mp3", ".aac", ".flac", ".ogg", ".aiff", ".m4a"):
-            source = SourceItem(
-                name=name,
-                path=path,
-                media_type="audio",
-                start_frame=1,
-                end_frame=1,
-                fps=24.0,
-                colorspace="Raw",
-                codec="Audio",
-                parent_folder_id=parent_folder_id,
-            )
-        else:
-            # Still image or general file
-            cs = detect_media_colorspace(path, ext)
-            source = SourceItem(
-                name=name,
-                path=path,
-                media_type="still",
-                start_frame=1001,
-                end_frame=1001,
-                fps=24.0,
-                colorspace=cs,
-                codec="Still Image",
-                parent_folder_id=parent_folder_id,
-            )
+        source = build_source_item_from_path(path, parent_folder_id)
+        if not source:
+            return None
 
         self.sources[source.id] = source
         if parent_folder_id and parent_folder_id in self.folders:
@@ -618,13 +701,43 @@ class SessionGraph(QObject):
         self.graph_changed.emit()
         return source
 
-    def add_sources_from_paths(self, paths: List[str], parent_folder_id: Optional[str] = None) -> List[SourceItem]:
+    def add_sources_batch(self, items: List[SourceItem], parent_folder_id: Optional[str] = None) -> List[SourceItem]:
+        """Batch-add multiple pre-built SourceItems with a single graph_changed signal emission."""
         added: List[SourceItem] = []
-        for p in paths:
-            s = self.add_source_from_path(p, parent_folder_id)
-            if s:
-                added.append(s)
+        for item in items:
+            if not item:
+                continue
+            norm_path = os.path.normpath(item.path)
+            already_exists = False
+            for s in self.sources.values():
+                if os.path.normpath(s.path) == norm_path:
+                    already_exists = True
+                    break
+            if already_exists:
+                continue
+
+            self.sources[item.id] = item
+            target_parent = item.parent_folder_id or parent_folder_id
+            if target_parent and target_parent in self.folders:
+                self.folders[target_parent].source_ids.append(item.id)
+            else:
+                self.root_source_ids.append(item.id)
+
+            if self.active_view_id is None:
+                self.set_active_view(ViewType.SOURCE, item.id)
+            added.append(item)
+
+        if added:
+            self.graph_changed.emit()
         return added
+
+    def add_sources_from_paths(self, paths: List[str], parent_folder_id: Optional[str] = None) -> List[SourceItem]:
+        items: List[SourceItem] = []
+        for p in paths:
+            s = build_source_item_from_path(p, parent_folder_id)
+            if s:
+                items.append(s)
+        return self.add_sources_batch(items, parent_folder_id)
 
     def create_folder(
         self,

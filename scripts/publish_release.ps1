@@ -10,7 +10,8 @@
 
 [CmdletBinding()]
 param(
-    [string]$TagName = "v1.0.0",
+    [string]$Version = "1.0.1",
+    [string]$TagName = "v1.0.1",
     [string]$RemoteName = "origin",
     [string]$RepoUrl = "https://github.com/maruthuvfx/OpenReview.git",
     [switch]$SkipPush
@@ -21,7 +22,7 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " OpenReview v1.0.0 GitHub Release & Distribution Helper" -ForegroundColor Cyan
+Write-Host " OpenReview v$Version GitHub Release & Distribution Helper" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 1. Check Git
@@ -49,10 +50,10 @@ if (-not $currentRemote) {
 # 4. Check Distribution Binaries
 $DistDir = Join-Path $ProjectRoot "Openreview_build"
 $ExpectedAssets = @(
-    "OpenReview-1.0.0-win64.msi",
-    "OpenReview-1.0.0-win64-portable.zip",
-    "openreview_1.0.0_amd64.deb",
-    "openreview-1.0.0-1.x86_64.rpm"
+    "OpenReview-$Version-win64.msi",
+    "OpenReview-$Version-win64-portable.zip",
+    "openreview_${Version}_amd64.deb",
+    "openreview-$Version-1.x86_64.rpm"
 )
 
 Write-Host "`n[3/5] Verifying distribution packages in Openreview_build/:" -ForegroundColor Cyan
@@ -99,12 +100,12 @@ Write-Host @"
 --------------------------------------------------------------------------------
 1. Navigate to: https://github.com/maruthuvfx/OpenReview/releases/new
 2. Select tag: $TagName
-3. Title: OpenReview v1.0.0 - Production Release
+3. Title: OpenReview v$Version - Production Release
 4. Drag and drop the following files from '$DistDir' into the release:
-   - OpenReview-1.0.0-win64.msi
-   - OpenReview-1.0.0-win64-portable.zip
-   - openreview_1.0.0_amd64.deb
-   - openreview-1.0.0-1.x86_64.rpm
+   - OpenReview-$Version-win64.msi
+   - OpenReview-$Version-win64-portable.zip
+   - openreview_${Version}_amd64.deb
+   - openreview-$Version-1.x86_64.rpm
 5. Click 'Publish release'.
 --------------------------------------------------------------------------------
 "@ -ForegroundColor Green

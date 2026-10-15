@@ -1,5 +1,9 @@
 # OpenReview Package & Plugin Management Guide
 
+**Author:** Maruthu Chakravarthi  
+**Version:** 1.0.0  
+**HTML Portal:** [docs/html/sdk.html](file:///e:/works/Pipeline/code/OpenReview/docs/html/sdk.html)
+
 OpenReview provides a modular extensibility system allowing studios and artists to create custom plugins, add menu actions, hook into playback events, and distribute packages across productions.
 
 ---
@@ -28,7 +32,7 @@ my_studio_plugin/
   "entrypoint": "plugin.py",
   "category": "Pipeline",
   "tags": ["database", "sync", "dailies"],
-  "min_openreview_version": "0.1.0",
+  "min_openreview_version": "1.0.0",
   "enabled": true,
   "hooks": [
     "on_media_loaded",

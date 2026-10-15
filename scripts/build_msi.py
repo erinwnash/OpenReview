@@ -20,9 +20,9 @@ from PIL import Image, ImageDraw
 
 
 PRODUCT_NAME = "OpenReview"
-PRODUCT_VERSION = "1.0.0"
+PRODUCT_VERSION = "1.0.1"
 MANUFACTURER = "OpenReview Technologies"
-PRODUCT_CODE = "{7D4E8A12-3F8B-4C61-9E2D-B85F6A913C44}"
+PRODUCT_CODE = "{6903AA59-55CD-4C0D-87CC-F65728401079}"
 UPGRADE_CODE = "{8E971B39-5B26-4B07-B7D8-87D98935FE21}"
 
 LICENSE_RTF = (
@@ -736,6 +736,17 @@ def build_msi(dist_dir: Path, project_root: Path) -> Path:
     # Type 210 = Exe (2) | File (16) | Continue (64) | Async (128)
     msilib.add_data(db, "CustomAction", [
         ("LaunchApplication", 210, main_exe_file_id, ""),
+    ])
+
+    # Windows Explorer File Association for .ovr (OpenReview Session)
+    msilib.add_data(db, "ProgId", [
+        ("OpenReview.Session", None, None, "OpenReview Session File", "openreview.ico", 0),
+    ])
+    msilib.add_data(db, "Extension", [
+        ("ovr", main_comp, "OpenReview.Session", "application/x-openreview", "MainFeature"),
+    ])
+    msilib.add_data(db, "Verb", [
+        ("ovr", "open", 0, "&Open with OpenReview", '"%1"'),
     ])
 
     # Media table

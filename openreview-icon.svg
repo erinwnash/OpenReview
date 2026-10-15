@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
-  <title id="title">Openreview minimal app icon</title>
-  <desc id="desc">Minimal open viewing frame and play cue</desc>
-  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M67 28H42a14 14 0 0 0-14 14v25M93 28h25a14 14 0 0 1 14 14v25M28 93v25a14 14 0 0 0 14 14h25M132 93v25a14 14 0 0 1-14 14H93" stroke="#38D9C6" stroke-width="13"/>
-    <path d="m69 57 43 23-43 23Z" fill="#F8FAFC" stroke="#F8FAFC" stroke-width="4"/>
-  </g>
-</svg>

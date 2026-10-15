@@ -205,8 +205,9 @@ class DiskSequenceReader(MediaReader):
             return self._last_valid_frame_data
 
         if self.seq.available_frames:
-            prev_frames = [f for f in self.seq.available_frames if f < frame]
-            target_f = prev_frames[-1] if prev_frames else self.seq.available_frames[0]
+            sorted_avail = sorted(self.seq.available_frames)
+            prev_frames = [f for f in sorted_avail if f < frame]
+            target_f = prev_frames[-1] if prev_frames else sorted_avail[0]
             target_path = self.seq.frame_path(target_f)
             if os.path.exists(target_path):
                 from openreview.core.image_io import read_image_file

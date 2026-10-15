@@ -172,8 +172,8 @@ class DailiesSyncWidget(QWidget):
         self.btn_connect.clicked.connect(self._on_connect_clicked)
         btn_conn_box.addWidget(self.btn_connect)
 
-        self.lbl_status = QLabel("🔴 Offline", grp_conn)
-        self.lbl_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
+        self.lbl_status = QLabel("● Offline", grp_conn)
+        self.lbl_status.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 12px;")
         btn_conn_box.addWidget(self.lbl_status)
         btn_conn_box.addStretch()
         form_conn.addRow("", btn_conn_box)
@@ -183,17 +183,21 @@ class DailiesSyncWidget(QWidget):
         grp_collab = QGroupBox("Collaboration & Presenter", tab_session)
         collab_layout = QVBoxLayout(grp_collab)
 
+        from openreview.resources import get_vfx_icon
+
         pres_row = QHBoxLayout()
         self.lbl_presenter = QLabel("Current Presenter: None", grp_collab)
         self.lbl_presenter.setStyleSheet("font-weight: bold; color: #e5a823;")
         pres_row.addWidget(self.lbl_presenter)
         pres_row.addStretch()
 
-        self.btn_take_presenter = QPushButton("👑 Take Control", grp_collab)
+        self.btn_take_presenter = QPushButton("Take Control", grp_collab)
+        self.btn_take_presenter.setIcon(get_vfx_icon("crown"))
         self.btn_take_presenter.clicked.connect(self.engine.request_presenter)
         pres_row.addWidget(self.btn_take_presenter)
 
-        self.btn_pass_presenter = QPushButton("🤝 Pass Control", grp_collab)
+        self.btn_pass_presenter = QPushButton("Pass Control", grp_collab)
+        self.btn_pass_presenter.setIcon(get_vfx_icon("handshake"))
         self.btn_pass_presenter.setToolTip("Pass presenter role to selected participant in peer list")
         self.btn_pass_presenter.clicked.connect(self._on_pass_presenter_clicked)
         pres_row.addWidget(self.btn_pass_presenter)
@@ -278,12 +282,12 @@ class DailiesSyncWidget(QWidget):
         self._on_presenter_changed(self.engine.presenter)
 
         if self.engine.is_connected:
-            self.lbl_status.setText(f"🟢 {self.engine.mode.capitalize()}")
-            self.lbl_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            self.lbl_status.setText(f"● {self.engine.mode.capitalize()}")
+            self.lbl_status.setStyleSheet("color: #2ecc71; font-weight: bold; font-size: 12px;")
             self.btn_connect.setText("Disconnect")
         else:
-            self.lbl_status.setText("🔴 Offline")
-            self.lbl_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
+            self.lbl_status.setText("● Offline")
+            self.lbl_status.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 12px;")
             self.btn_connect.setText("Start Hosting" if self.radio_host.isChecked() else "Join Session")
 
     def _on_mode_toggled(self) -> None:
@@ -317,7 +321,7 @@ class DailiesSyncWidget(QWidget):
         if not item:
             QMessageBox.information(self, "Select Participant", "Please select a peer from the participants list first.")
             return
-        target_user = item.text().replace(" (Host)", "").replace(" 👑", "").strip()
+        target_user = item.text().replace(" (Host)", "").replace(" [Presenter]", "").replace(" \U0001f451", "").strip()
         self.engine.grant_presenter(target_user)
 
     def _on_export_chat_clicked(self) -> None:
@@ -341,12 +345,12 @@ class DailiesSyncWidget(QWidget):
 
     def _on_status_changed(self, connected: bool, text: str) -> None:
         if connected:
-            self.lbl_status.setText(f"🟢 {self.engine.mode.capitalize()}")
-            self.lbl_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            self.lbl_status.setText(f"● {self.engine.mode.capitalize()}")
+            self.lbl_status.setStyleSheet("color: #2ecc71; font-weight: bold; font-size: 12px;")
             self.btn_connect.setText("Disconnect")
         else:
-            self.lbl_status.setText("🔴 Offline")
-            self.lbl_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
+            self.lbl_status.setText("● Offline")
+            self.lbl_status.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 12px;")
             self.btn_connect.setText("Start Hosting" if self.radio_host.isChecked() else "Join Session")
             self.list_peers.clear()
 

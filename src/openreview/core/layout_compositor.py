@@ -111,9 +111,8 @@ def composite_layout_grid(
     total_w = cols * tile_w
     total_h = rows * tile_h
 
-    # Canvas initialized to dark theme background (0.05) with opaque alpha
+    # Canvas initialized to pure black (0.0) with opaque alpha
     canvas = np.zeros((total_h, total_w, 4), dtype=np.float32)
-    canvas[:, :, :3] = 0.05
     canvas[:, :, 3] = 1.0
 
     for idx, sid in enumerate(layout.source_ids):
@@ -157,11 +156,8 @@ def composite_layout_grid(
                 resized = resize_frame_fast(tile_rgba, tile_w, tile_h)
                 canvas[y_start:y_end, x_start:x_end] = resized
         else:
-            # Placeholder dark tile with subtle border
-            canvas[y_start:y_end, x_start:x_end, :3] = 0.08
-            canvas[y_start : y_start + 1, x_start:x_end, :3] = 0.25
-            canvas[y_end - 1 : y_end, x_start:x_end, :3] = 0.25
-            canvas[y_start:y_end, x_start : x_start + 1, :3] = 0.25
-            canvas[y_start:y_end, x_end - 1 : x_end, :3] = 0.25
+            # Unused or empty tile: seamless pure black with no borders
+            canvas[y_start:y_end, x_start:x_end, :3] = 0.0
+            canvas[y_start:y_end, x_start:x_end, 3] = 1.0
 
     return canvas

@@ -115,11 +115,15 @@ class OCIOConfigWidget(QWidget):
         self.edit_path.setReadOnly(True)
         path_box.addWidget(self.edit_path, stretch=3)
 
-        self.btn_browse = QPushButton("📁 Browse...", grp_file)
+        from openreview.resources import get_vfx_icon
+
+        self.btn_browse = QPushButton("Browse...", grp_file)
+        self.btn_browse.setIcon(get_vfx_icon("folder"))
         self.btn_browse.clicked.connect(self._on_browse_config)
         path_box.addWidget(self.btn_browse)
 
-        self.btn_reset = QPushButton("↺ Built-in", grp_file)
+        self.btn_reset = QPushButton("Reset Built-in", grp_file)
+        self.btn_reset.setIcon(get_vfx_icon("refresh"))
         self.btn_reset.setToolTip("Reset to built-in ACEScg analytical pipeline")
         self.btn_reset.clicked.connect(self._on_reset_clicked)
         path_box.addWidget(self.btn_reset)
@@ -165,9 +169,11 @@ class OCIOConfigWidget(QWidget):
         self.list_sp = QListWidget(tab_sp)
         layout_sp.addWidget(self.list_sp)
         sp_btns = QHBoxLayout()
-        self.btn_add_sp = QPushButton("📁 Add LUT Directory...", tab_sp)
+        self.btn_add_sp = QPushButton("Add LUT Directory...", tab_sp)
+        self.btn_add_sp.setIcon(get_vfx_icon("folder"))
         self.btn_add_sp.clicked.connect(self._on_add_search_path)
         self.btn_remove_sp = QPushButton("Remove", tab_sp)
+        self.btn_remove_sp.setIcon(get_vfx_icon("delete"))
         self.btn_remove_sp.clicked.connect(self._on_remove_search_path)
         sp_btns.addWidget(self.btn_add_sp)
         sp_btns.addWidget(self.btn_remove_sp)

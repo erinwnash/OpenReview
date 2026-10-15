@@ -25,11 +25,14 @@ class UserPreferences:
     play_all_frames: bool = True
 
     # Caching
-    default_cache_mode: str = "region"  # "off", "play_ahead", "region", "all"
+    default_cache_mode: str = "off"  # "off", "play_ahead", "region", "all"
     auto_ram_budget: bool = True
     lookahead_cache_gb: float = 4.0
     region_cache_gb: float = 4.0
     lookahead_behind_pct: float = 20.0
+    enable_disk_cache: bool = True
+    disk_cache_dir: str = ""  # empty = default OS temp directory
+    max_disk_cache_gb: float = 20.0
 
     # Playback Performance & Low-spec / GPU Workstation Optimization
     playback_texture_mode: str = "auto"  # "auto", "rgba8" (fast/laptop), "rgba16f", "rgba32f"

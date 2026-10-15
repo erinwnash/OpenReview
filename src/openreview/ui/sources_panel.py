@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
     QSplitter,
 )
 
-from openreview.resources import get_branch_closed_icon_path, get_branch_open_icon_path
+from openreview.resources import get_branch_closed_icon_path, get_branch_open_icon_path, get_vfx_icon
 from openreview.resources.svg_icons import get_svg_icon
 from openreview.models.session_graph import (
     SessionGraph,
@@ -130,6 +130,11 @@ class SourcesPanelWidget(QWidget):
     sources_cleared_to_fresh_start = Signal()
     reload_source_requested = Signal(str)  # source_id
     reload_source_update_requested = Signal(str)  # source_id
+    exr_contact_sheet_requested = Signal()
+    exr_view_single_requested = Signal()
+    exr_export_sheet_requested = Signal()
+    exr_show_inspector_requested = Signal()
+    exr_metadata_requested = Signal(str)  # exr file path
 
     def __init__(self, graph: SessionGraph, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -285,6 +290,68 @@ class SourcesPanelWidget(QWidget):
         self.tree.files_dropped.connect(lambda paths: self.media_load_requested.emit(paths))
         self.tree.internal_move_requested.connect(self._on_internal_move)
         top_layout.addWidget(self.tree, stretch=1)
+
+        # 2.5 Dedicated Multi-Channel EXR Properties Bar (Red marked area)
+        self.exr_properties_bar = QFrame(self)
+        self.exr_properties_bar.setStyleSheet("""
+            QFrame {
+                background-color: #171717;
+                border: 1px solid #2a2a2a;
+                border-radius: 3px;
+                padding: 2px 4px;
+            }
+            QPushButton {
+                background-color: #242424;
+                border: 1px solid #383838;
+                color: #dcdcdc;
+                padding: 3px 6px;
+                border-radius: 2px;
+                font-size: 10px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #333333;
+                border-color: #e5a823;
+                color: #ffffff;
+            }
+            QPushButton:pressed {
+                background-color: #e5a823;
+                color: #121212;
+            }
+        """)
+        exr_bar_layout = QHBoxLayout(self.exr_properties_bar)
+        exr_bar_layout.setContentsMargins(4, 2, 4, 2)
+        exr_bar_layout.setSpacing(4)
+
+        self.lbl_exr_badge = QLabel("EXR", self.exr_properties_bar)
+        self.lbl_exr_badge.setStyleSheet("font-weight: bold; color: #e5a823; font-size: 10px;")
+        exr_bar_layout.addWidget(self.lbl_exr_badge)
+
+        self.btn_exr_contact_sheet = QPushButton("Contact Sheet", self.exr_properties_bar)
+        self.btn_exr_contact_sheet.setIcon(get_svg_icon("layout", color_normal="#cccccc", color_active="#e5a823", size=13))
+        self.btn_exr_contact_sheet.setToolTip("View all EXR passes in Contact Sheet mode")
+        self.btn_exr_contact_sheet.clicked.connect(self.exr_contact_sheet_requested.emit)
+        exr_bar_layout.addWidget(self.btn_exr_contact_sheet)
+
+        self.btn_exr_view_single = QPushButton("View Single", self.exr_properties_bar)
+        self.btn_exr_view_single.setIcon(get_svg_icon("media_image", color_normal="#cccccc", color_active="#e5a823", size=13))
+        self.btn_exr_view_single.setToolTip("Exit contact sheet and return to beauty pass")
+        self.btn_exr_view_single.clicked.connect(self.exr_view_single_requested.emit)
+        exr_bar_layout.addWidget(self.btn_exr_view_single)
+
+        self.btn_exr_export_sheet = QPushButton("Export Sheet", self.exr_properties_bar)
+        self.btn_exr_export_sheet.setIcon(get_svg_icon("export", color_normal="#38d9c6", color_active="#e5a823", size=13))
+        self.btn_exr_export_sheet.setToolTip("Export Contact Sheet frame snapshot or sequence")
+        self.btn_exr_export_sheet.clicked.connect(self.exr_export_sheet_requested.emit)
+        exr_bar_layout.addWidget(self.btn_exr_export_sheet)
+
+        self.btn_exr_inspector = QPushButton("Passes ▾", self.exr_properties_bar)
+        self.btn_exr_inspector.setToolTip("Open EXR Multilayer Pass Inspector HUD")
+        self.btn_exr_inspector.clicked.connect(self.exr_show_inspector_requested.emit)
+        exr_bar_layout.addWidget(self.btn_exr_inspector)
+
+        top_layout.addWidget(self.exr_properties_bar)
+        self.exr_properties_bar.hide()
 
         # 3. Action Toolbar (SVG vector icons)
         tools_box = QHBoxLayout()
@@ -518,6 +585,25 @@ class SourcesPanelWidget(QWidget):
 
         form_clip.addRow("Range:", in_out_box)
 
+        # Start at : selection menu and numeric spinbox
+        start_at_box = QHBoxLayout()
+        start_at_box.setSpacing(4)
+        self.combo_start_at = QComboBox(self.frame_clip_edit)
+        self.combo_start_at.addItem("Custom", "custom")
+        self.combo_start_at.addItem("Frame 1", 1)
+        self.combo_start_at.addItem("Frame 1001", 1001)
+        self.combo_start_at.addItem("Current Playhead", "playhead")
+        self.combo_start_at.addItem("Source Original", "original")
+        self.combo_start_at.currentIndexChanged.connect(self._on_start_at_combo_changed)
+        start_at_box.addWidget(self.combo_start_at, stretch=2)
+
+        self.spin_start_at = QSpinBox(self.frame_clip_edit)
+        self.spin_start_at.setRange(0, 999999)
+        self.spin_start_at.setValue(1001)
+        self.spin_start_at.valueChanged.connect(self._on_start_at_spin_changed)
+        start_at_box.addWidget(self.spin_start_at, stretch=1)
+        form_clip.addRow("Start at :", start_at_box)
+
         fps_box = QHBoxLayout()
         self.spin_fps = QDoubleSpinBox(self.frame_clip_edit)
         self.spin_fps.setRange(1.0, 240.0)
@@ -554,7 +640,8 @@ class SourcesPanelWidget(QWidget):
         self.lbl_codec_info.setStyleSheet("color: #888888; font-size: 11px;")
         form_clip.addRow("", self.lbl_codec_info)
 
-        self.btn_inspect_details = QPushButton("🔍 Inspect Full Details (I)", self.frame_clip_edit)
+        self.btn_inspect_details = QPushButton("Inspect Full Details (I)", self.frame_clip_edit)
+        self.btn_inspect_details.setIcon(get_vfx_icon("search"))
         self.btn_inspect_details.setStyleSheet("color: #e5a823; font-weight: bold; padding: 4px; margin-top: 4px;")
         self.btn_inspect_details.setToolTip("Open Source Media Details floating panel (I)")
         self.btn_inspect_details.clicked.connect(self._on_open_source_details)
@@ -577,6 +664,13 @@ class SourcesPanelWidget(QWidget):
         self.combo_layout_type.addItems(["Auto-Fit Grid", "Side-by-Side", "Over-Under", "2x2 Grid", "3x3 Grid"])
         self.combo_layout_type.currentIndexChanged.connect(self._on_layout_type_changed)
         form_lay.addRow("Grid Arrangement:", self.combo_layout_type)
+
+        self.combo_layout_align = QComboBox(self.frame_layout_edit)
+        self.combo_layout_align.addItem("Frame 1 (Synchronized)", "frame_1")
+        self.combo_layout_align.addItem("Min Source Frame", "min_source")
+        self.combo_layout_align.addItem("Source Native Frames", "native")
+        self.combo_layout_align.currentIndexChanged.connect(self._on_layout_align_changed)
+        form_lay.addRow("Align Start at :", self.combo_layout_align)
         edit_layout.addWidget(self.frame_layout_edit)
 
         edit_layout.addStretch()
@@ -601,6 +695,7 @@ class SourcesPanelWidget(QWidget):
         item_type: str,
         items_dict: dict,
         label_func,
+        icon_func=None,
         expanded_states: Optional[Dict[str, bool]] = None,
     ) -> None:
         """Populate hierarchical folders and items for a specific section (source, sequence, stack, layout)."""
@@ -611,7 +706,8 @@ class SourcesPanelWidget(QWidget):
 
         folder_widgets = {}
         for fid, f in section_folders.items():
-            f_item = QTreeWidgetItem([f"📁 {f.name}"])
+            f_item = QTreeWidgetItem([f.name])
+            f_item.setIcon(0, get_vfx_icon("folder"))
             f_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "folder", "id": fid, "folder_type": folder_type})
             f_item.setFlags(f_item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
             folder_widgets[fid] = f_item
@@ -628,6 +724,13 @@ class SourcesPanelWidget(QWidget):
         for iid, obj in items_dict.items():
             text = label_func(obj)
             item_widget = QTreeWidgetItem([text])
+            if icon_func is not None:
+                try:
+                    ic = icon_func(obj)
+                    if ic and not ic.isNull():
+                        item_widget.setIcon(0, ic)
+                except Exception:
+                    pass
             item_widget.setData(0, Qt.ItemDataRole.UserRole, {"type": item_type, "id": iid})
             item_widget.setFlags(item_widget.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
             parent_fid = getattr(obj, "parent_folder_id", None)
@@ -667,15 +770,21 @@ class SourcesPanelWidget(QWidget):
         self.root_sources.setExpanded(expanded_states.get("sources", True))
         self.root_sources.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": "sources"})
         self.root_sources.setFlags((self.root_sources.flags() | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled)
+
         def _source_label(s: SourceItem) -> str:
+            return s.name
+
+        def _source_icon(s: SourceItem) -> QIcon:
             if s.media_type == "video":
-                return f"🎬 {s.name}"
+                return get_vfx_icon("media_video")
             elif s.media_type == "sequence":
-                return f"🎞️ {s.name}"
-            elif s.media_type == "synthetic_pattern" or s.path == "synthetic_pattern":
-                return f"🎨 {s.name}"
-            return f"🖼️ {s.name}"
-        self._populate_section(self.root_sources, "source", "source", self.graph.sources, _source_label, expanded_states)
+                return get_vfx_icon("media_sequence")
+            return get_vfx_icon("media_image")
+
+        self._populate_section(
+            self.root_sources, "source", "source", self.graph.sources,
+            _source_label, _source_icon, expanded_states
+        )
 
         # 2. Root Group: SEQUENCES
         self.root_sequences = QTreeWidgetItem(self.tree, ["SEQUENCES"])
@@ -684,7 +793,8 @@ class SourcesPanelWidget(QWidget):
         self.root_sequences.setFlags((self.root_sequences.flags() | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled)
         self._populate_section(
             self.root_sequences, "sequence", "sequence", self.graph.sequences,
-            lambda q: f"⏱️ {q.name} ({len(q.clips)} clips)",
+            lambda q: f"{q.name} ({len(q.clips)} clips)",
+            lambda q: get_vfx_icon("media_sequence"),
             expanded_states
         )
 
@@ -695,7 +805,8 @@ class SourcesPanelWidget(QWidget):
         self.root_stacks.setFlags((self.root_stacks.flags() | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled)
         self._populate_section(
             self.root_stacks, "stack", "stack", self.graph.stacks,
-            lambda k: f"📑 {k.name} ({len(k.source_ids)} layers)",
+            lambda k: f"{k.name} ({len(k.source_ids)} layers)",
+            lambda k: get_vfx_icon("media_stack"),
             expanded_states
         )
 
@@ -706,7 +817,8 @@ class SourcesPanelWidget(QWidget):
         self.root_layouts.setFlags((self.root_layouts.flags() | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled)
         self._populate_section(
             self.root_layouts, "layout", "layout", self.graph.layouts,
-            lambda l: f"⊞ {l.name} ({len(l.source_ids)} views, {l.scale_pct}%)",
+            lambda l: f"{l.name} ({len(l.source_ids)} views, {l.scale_pct}%)",
+            lambda l: get_vfx_icon("layout"),
             expanded_states
         )
 
@@ -855,51 +967,68 @@ class SourcesPanelWidget(QWidget):
         # 1. Rename (for single non-group item)
         if len(selected_nodes) == 1 and selected_nodes[0].get("type") != "group":
             target_item = clicked_item or (self.tree.selectedItems()[0] if self.tree.selectedItems() else None)
-            act_rename = menu.addAction("✏️ Rename (F2)")
+            act_rename = menu.addAction(get_vfx_icon("rename"), "Rename (F2)")
             act_rename.triggered.connect(lambda: self._on_rename_item(target_item))
             menu.addSeparator()
 
         # 2. New Folder
-        act_folder = menu.addAction("📁 New Folder")
+        act_folder = menu.addAction(get_vfx_icon("folder"), "New Folder")
         act_folder.triggered.connect(self._on_create_folder)
 
         # 3. Reveal in Explorer (for Source Media items)
         if selected_sources:
-            act_reveal = menu.addAction("📂 Reveal in Explorer")
+            act_reveal = menu.addAction(get_vfx_icon("reveal"), "Reveal in Explorer")
             act_reveal.triggered.connect(lambda: self._on_reveal_in_explorer(selected_sources[0]))
 
         # 4. New Viewable Submenu
-        view_menu = menu.addMenu("➕ New Viewable")
-        act_seq = view_menu.addAction("🎵 Sequence")
+        view_menu = menu.addMenu(get_vfx_icon("layout"), "New Viewable")
+        act_seq = view_menu.addAction(get_vfx_icon("media_sequence"), "Sequence")
         act_seq.triggered.connect(lambda: self._create_viewable_from_selection("sequence"))
 
-        act_stack = view_menu.addAction("📑 Stack (A/B & Difference)")
+        act_stack = view_menu.addAction(get_vfx_icon("media_stack"), "Stack (A/B & Difference)")
         act_stack.triggered.connect(lambda: self._create_viewable_from_selection("stack"))
 
-        act_layout = view_menu.addAction("🔲 Layout")
+        act_layout = view_menu.addAction(get_vfx_icon("layout"), "Layout")
         act_layout.triggered.connect(lambda: self._create_viewable_from_selection("layout"))
 
         menu.addSeparator()
 
         # 5. Delete View / Source
         if selected_nodes and selected_nodes[0].get("type") != "group":
-            act_del = menu.addAction("🗑 Delete")
+            act_del = menu.addAction(get_vfx_icon("delete"), "Delete")
             act_del.triggered.connect(self._on_delete_selected)
 
         # 6. Make Active
         if len(selected_nodes) == 1 and selected_nodes[0].get("type") in ("source", "sequence", "stack", "layout"):
-            act_active = menu.addAction("🏠 Select Current View")
+            act_active = menu.addAction(get_vfx_icon("view_home"), "Select Current View")
             act_active.triggered.connect(self._on_make_selected_active)
 
         # 7. Reload Media & Reload Update
         if selected_sources:
             src_id = selected_sources[0]
             menu.addSeparator()
-            act_reload = menu.addAction("🔄 Reload Media")
+            act_reload = menu.addAction(get_vfx_icon("refresh"), "Reload Media")
             act_reload.triggered.connect(lambda: self.reload_source_requested.emit(src_id))
 
-            act_reload_up = menu.addAction("⚡ Reload Update")
+            act_reload_up = menu.addAction(get_vfx_icon("reload_update"), "Reload Update")
             act_reload_up.triggered.connect(lambda: self.reload_source_update_requested.emit(src_id))
+
+            # 8. EXR Multi-Channel Review Actions
+            src_item = self.graph.sources.get(src_id)
+            src_p = getattr(src_item, "path", getattr(src_item, "file_path", "")) if src_item else ""
+            if src_p and str(src_p).lower().endswith(".exr"):
+                menu.addSeparator()
+                act_cs = menu.addAction(get_vfx_icon("layout"), "View Contact Sheet")
+                act_cs.triggered.connect(self.exr_contact_sheet_requested.emit)
+
+                act_vs = menu.addAction(get_vfx_icon("media_image"), "View Single (Beauty)")
+                act_vs.triggered.connect(self.exr_view_single_requested.emit)
+
+                act_exp_cs = menu.addAction(get_vfx_icon("export"), "Export Contact Sheet...")
+                act_exp_cs.triggered.connect(self.exr_export_sheet_requested.emit)
+
+                act_meta = menu.addAction(get_vfx_icon("reveal"), "EXR Metadata & Header Details...")
+                act_meta.triggered.connect(lambda p=src_p: self.exr_metadata_requested.emit(str(p)))
 
         self._execute_menu(menu, self.tree.viewport().mapToGlobal(pos))
 
@@ -908,11 +1037,11 @@ class SourcesPanelWidget(QWidget):
 
     def _show_new_viewable_menu(self) -> None:
         menu = QMenu(self)
-        act_seq = menu.addAction("🎵 Sequence from Selection")
+        act_seq = menu.addAction(get_vfx_icon("media_sequence"), "Sequence from Selection")
         act_seq.triggered.connect(lambda: self._create_viewable_from_selection("sequence"))
-        act_stack = menu.addAction("📑 Stack from Selection")
+        act_stack = menu.addAction(get_vfx_icon("media_stack"), "Stack from Selection")
         act_stack.triggered.connect(lambda: self._create_viewable_from_selection("stack"))
-        act_layout = menu.addAction("🔲 Layout from Selection")
+        act_layout = menu.addAction(get_vfx_icon("layout"), "Layout from Selection")
         act_layout.triggered.connect(lambda: self._create_viewable_from_selection("layout"))
         menu.exec(QCursor.pos())
 
@@ -1018,7 +1147,7 @@ class SourcesPanelWidget(QWidget):
             try:
                 seq_info = detect_image_sequence(source.path)
                 if seq_info and seq_info.available_frames:
-                    first_frame = seq_info.available_frames[0]
+                    first_frame = min(seq_info.available_frames)
                     first_path = seq_info.frame_path(first_frame)
                     if os.path.exists(first_path):
                         target_path = first_path
@@ -1057,10 +1186,15 @@ class SourcesPanelWidget(QWidget):
                 self.graph.delete_view(ViewType(ntype), nid)
 
         self.refresh_tree()
-        self.view_updated.emit()
-
-        if len(self.graph.sources) == 0:
+        if (
+            len(self.graph.sources) == 0
+            and len(self.graph.sequences) == 0
+            and len(self.graph.stacks) == 0
+            and len(self.graph.layouts) == 0
+        ):
             self.sources_cleared_to_fresh_start.emit()
+        else:
+            self.view_updated.emit()
 
     def _on_internal_move(self, src_data: dict, target_data: dict) -> None:
         """Handle internal drag-and-drop parenting of items and folders."""
@@ -1101,13 +1235,13 @@ class SourcesPanelWidget(QWidget):
 
     def _show_import_menu(self) -> None:
         menu = QMenu(self)
-        act_files = menu.addAction("🎬 Import Media Files...")
+        act_files = menu.addAction(get_vfx_icon("media_video"), "Import Media Files...")
         act_files.triggered.connect(self._on_add_media_files)
 
-        act_seq = menu.addAction("🎞️ Import Image Sequence...")
+        act_seq = menu.addAction(get_vfx_icon("media_sequence"), "Import Image Sequence...")
         act_seq.triggered.connect(self._on_import_image_sequence)
 
-        act_dir = menu.addAction("📁 Import Directory / Footage Folder...")
+        act_dir = menu.addAction(get_vfx_icon("folder"), "Import Directory / Footage Folder...")
         act_dir.triggered.connect(self._on_import_directory)
 
         menu.exec(QCursor.pos())
@@ -1156,7 +1290,6 @@ class SourcesPanelWidget(QWidget):
                 pass
 
             if found:
-                self.graph.add_sources_from_paths(found)
                 self.media_load_requested.emit(found)
 
     def _on_make_selected_active(self) -> None:
@@ -1213,7 +1346,7 @@ class SourcesPanelWidget(QWidget):
             f"All Media ({vid_globs} {img_globs} *.wav *.mp3);;Video Files ({vid_globs});;Image Files ({img_globs});;All Files (*.*)",
         )
         if paths:
-            self.graph.add_sources_from_paths(paths)
+            self.media_load_requested.emit(paths)
 
     # --------------------------------------------------------------------------
     # Subpanels: [Inputs] and [Edit]
@@ -1328,17 +1461,41 @@ class SourcesPanelWidget(QWidget):
                 self.combo_scale_pct.blockSignals(True)
                 self.combo_scale_pct.setCurrentIndex(s_idx)
                 self.combo_scale_pct.blockSignals(False)
+
+            type_rev_map = {
+                "auto_grid": "Auto-Fit Grid",
+                "side_by_side": "Side-by-Side",
+                "over_under": "Over-Under",
+                "grid_2x2": "2x2 Grid",
+                "grid_3x3": "3x3 Grid",
+            }
+            t_text = type_rev_map.get(target_layout.layout_type, "Auto-Fit Grid")
+            t_idx = self.combo_layout_type.findText(t_text)
+            if t_idx >= 0:
+                self.combo_layout_type.blockSignals(True)
+                self.combo_layout_type.setCurrentIndex(t_idx)
+                self.combo_layout_type.blockSignals(False)
+
+            align_val = getattr(target_layout, "align_mode", "frame_1")
+            a_idx = self.combo_layout_align.findData(align_val)
+            if a_idx >= 0:
+                self.combo_layout_align.blockSignals(True)
+                self.combo_layout_align.setCurrentIndex(a_idx)
+                self.combo_layout_align.blockSignals(False)
         else:
             self.frame_layout_edit.hide()
             self.frame_clip_edit.show()
             if target_source:
                 self.spin_in.blockSignals(True)
                 self.spin_out.blockSignals(True)
+                self.spin_start_at.blockSignals(True)
                 self.spin_fps.blockSignals(True)
                 self.combo_colorspace.blockSignals(True)
 
                 self.spin_in.setValue(target_source.start_frame)
                 self.spin_out.setValue(target_source.end_frame)
+                self.spin_start_at.setValue(target_source.start_frame)
+                self._sync_start_at_combo_preset(target_source.start_frame)
                 self.spin_fps.setValue(target_source.fps)
                 c_idx = self.combo_colorspace.findText(target_source.colorspace, Qt.MatchFlag.MatchContains)
                 if c_idx >= 0:
@@ -1348,8 +1505,31 @@ class SourcesPanelWidget(QWidget):
 
                 self.spin_in.blockSignals(False)
                 self.spin_out.blockSignals(False)
+                self.spin_start_at.blockSignals(False)
                 self.spin_fps.blockSignals(False)
                 self.combo_colorspace.blockSignals(False)
+
+        # 3. Dynamic EXR Properties Bar visibility
+        exr_path = None
+        target_p = getattr(target_source, "path", getattr(target_source, "file_path", None)) if target_source else None
+        viewable_p = getattr(viewable, "path", getattr(viewable, "file_path", None)) if isinstance(viewable, SourceItem) else None
+
+        if target_p and str(target_p).lower().endswith(".exr"):
+            exr_path = target_p
+        elif viewable_p and str(viewable_p).lower().endswith(".exr"):
+            exr_path = viewable_p
+
+        if exr_path and hasattr(self, "exr_properties_bar"):
+            try:
+                from openreview.core.image_io import get_exr_channels
+                ch_info = get_exr_channels(str(exr_path))
+                num_layers = len(ch_info.get("layers", {}))
+                self.lbl_exr_badge.setText(f"EXR ({num_layers} AOVs)" if num_layers > 1 else "EXR")
+            except Exception:
+                self.lbl_exr_badge.setText("EXR")
+            self.exr_properties_bar.show()
+        elif hasattr(self, "exr_properties_bar"):
+            self.exr_properties_bar.hide()
 
     def _on_open_source_details(self) -> None:
         """Trigger Source Media Details panel from Edit tab."""
@@ -1467,65 +1647,116 @@ class SourcesPanelWidget(QWidget):
             viewable.channels_a = ch
             self.view_updated.emit()
 
-    def _on_clip_in_changed(self, val: int) -> None:
+    def _get_target_source(self) -> Optional[SourceItem]:
         selected_nodes = self._get_selected_nodes()
-        s = None
         if selected_nodes and selected_nodes[0].get("type") == "source":
-            s = self.graph.sources.get(selected_nodes[0].get("id"))
+            return self.graph.sources.get(selected_nodes[0].get("id"))
         elif self.graph.active_view_type == ViewType.SOURCE and self.graph.active_view_id:
-            s = self.graph.sources.get(self.graph.active_view_id)
+            return self.graph.sources.get(self.graph.active_view_id)
+        return None
+
+    def _sync_start_at_combo_preset(self, val: int) -> None:
+        self.combo_start_at.blockSignals(True)
+        if val == 1:
+            idx = self.combo_start_at.findData(1)
+        elif val == 1001:
+            idx = self.combo_start_at.findData(1001)
+        else:
+            idx = self.combo_start_at.findData("custom")
+        if idx >= 0:
+            self.combo_start_at.setCurrentIndex(idx)
+        self.combo_start_at.blockSignals(False)
+
+    def _apply_start_frame_shift(self, new_start: int) -> None:
+        s = self._get_target_source()
+        if not s:
+            return
+        duration = max(1, s.end_frame - s.start_frame + 1)
+        s.start_frame = int(new_start)
+        s.end_frame = int(new_start + duration - 1)
+
+        self.spin_in.blockSignals(True)
+        self.spin_out.blockSignals(True)
+        self.spin_start_at.blockSignals(True)
+
+        self.spin_in.setValue(s.start_frame)
+        self.spin_out.setValue(s.end_frame)
+        self.spin_start_at.setValue(s.start_frame)
+
+        self.spin_in.blockSignals(False)
+        self.spin_out.blockSignals(False)
+        self.spin_start_at.blockSignals(False)
+
+        self._sync_start_at_combo_preset(s.start_frame)
+        self.lbl_codec_info.setText(f"Codec: {s.codec} | Range: [{s.start_frame}..{s.end_frame}]")
+        self.view_updated.emit()
+
+    def _on_start_at_combo_changed(self, idx: int) -> None:
+        val = self.combo_start_at.itemData(idx)
+        if val == "custom":
+            return
+        elif val == 1 or val == 1001:
+            self._apply_start_frame_shift(int(val))
+        elif val == "playhead":
+            w = self.window()
+            playhead = 1001
+            if w and hasattr(w, "clock") and hasattr(w.clock, "current_frame"):
+                playhead = int(w.clock.current_frame)
+            elif w and hasattr(w, "timeline") and hasattr(w.timeline, "current_frame"):
+                playhead = int(w.timeline.current_frame)
+            self._apply_start_frame_shift(playhead)
+        elif val == "original":
+            s = self._get_target_source()
+            orig_start = s.orig_start_frame if (s and s.orig_start_frame is not None) else 1001
+            self._apply_start_frame_shift(orig_start)
+
+    def _on_start_at_spin_changed(self, val: int) -> None:
+        self._apply_start_frame_shift(val)
+
+    def _on_clip_in_changed(self, val: int) -> None:
+        s = self._get_target_source()
         if s:
             s.start_frame = val
+            self.spin_start_at.blockSignals(True)
+            self.spin_start_at.setValue(val)
+            self.spin_start_at.blockSignals(False)
+            self._sync_start_at_combo_preset(val)
+            self.lbl_codec_info.setText(f"Codec: {s.codec} | Range: [{s.start_frame}..{s.end_frame}]")
             self.view_updated.emit()
 
     def _on_clip_out_changed(self, val: int) -> None:
-        selected_nodes = self._get_selected_nodes()
-        s = None
-        if selected_nodes and selected_nodes[0].get("type") == "source":
-            s = self.graph.sources.get(selected_nodes[0].get("id"))
-        elif self.graph.active_view_type == ViewType.SOURCE and self.graph.active_view_id:
-            s = self.graph.sources.get(self.graph.active_view_id)
+        s = self._get_target_source()
         if s:
             s.end_frame = val
+            self.lbl_codec_info.setText(f"Codec: {s.codec} | Range: [{s.start_frame}..{s.end_frame}]")
             self.view_updated.emit()
 
     def _on_clear_clip_in_out(self) -> None:
         """Reset selected or active clip in/out range back to original detected media bounds."""
-        selected_nodes = self._get_selected_nodes()
-        s = None
-        if selected_nodes and selected_nodes[0].get("type") == "source":
-            s = self.graph.sources.get(selected_nodes[0].get("id"))
-        elif self.graph.active_view_type == ViewType.SOURCE and self.graph.active_view_id:
-            s = self.graph.sources.get(self.graph.active_view_id)
+        s = self._get_target_source()
         if s:
             s.reset_in_out()
             self.spin_in.blockSignals(True)
             self.spin_out.blockSignals(True)
+            self.spin_start_at.blockSignals(True)
             self.spin_in.setValue(s.start_frame)
             self.spin_out.setValue(s.end_frame)
-            self.lbl_codec_info.setText(f"Codec: {s.codec} | Range: [{s.start_frame}..{s.end_frame}]")
+            self.spin_start_at.setValue(s.start_frame)
             self.spin_in.blockSignals(False)
             self.spin_out.blockSignals(False)
+            self.spin_start_at.blockSignals(False)
+            self._sync_start_at_combo_preset(s.start_frame)
+            self.lbl_codec_info.setText(f"Codec: {s.codec} | Range: [{s.start_frame}..{s.end_frame}]")
             self.view_updated.emit()
 
     def _on_clip_fps_changed(self, val: float) -> None:
-        selected_nodes = self._get_selected_nodes()
-        s = None
-        if selected_nodes and selected_nodes[0].get("type") == "source":
-            s = self.graph.sources.get(selected_nodes[0].get("id"))
-        elif self.graph.active_view_type == ViewType.SOURCE and self.graph.active_view_id:
-            s = self.graph.sources.get(self.graph.active_view_id)
+        s = self._get_target_source()
         if s:
             s.fps = val
             self.view_updated.emit()
 
     def _on_clip_colorspace_changed(self) -> None:
-        selected_nodes = self._get_selected_nodes()
-        s = None
-        if selected_nodes and selected_nodes[0].get("type") == "source":
-            s = self.graph.sources.get(selected_nodes[0].get("id"))
-        elif self.graph.active_view_type == ViewType.SOURCE and self.graph.active_view_id:
-            s = self.graph.sources.get(self.graph.active_view_id)
+        s = self._get_target_source()
         if s:
             s.colorspace = self.combo_colorspace.currentText()
             self.view_updated.emit()
@@ -1553,6 +1784,13 @@ class SourcesPanelWidget(QWidget):
         viewable = self.graph.get_active_viewable()
         if isinstance(viewable, LayoutView):
             viewable.layout_type = type_map.get(text, "auto_grid")
+            self.view_updated.emit()
+
+    def _on_layout_align_changed(self, idx: int) -> None:
+        align_mode = self.combo_layout_align.itemData(idx) or "frame_1"
+        viewable = self.graph.get_active_viewable()
+        if isinstance(viewable, LayoutView):
+            viewable.align_mode = align_mode
             self.view_updated.emit()
 
     def _on_input_item_double_clicked(self, item: QListWidgetItem) -> None:

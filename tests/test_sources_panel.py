@@ -280,9 +280,9 @@ def test_source_click_activates_and_renders(qtbot, temp_media):
     assert window.clock.start_frame == 200
     assert window.clock.end_frame == 250
 
-    # 3. In/Out marks within the new range should be preserved
-    assert window.clock.in_frame == 210
-    assert window.clock.out_frame == 240
+    # 3. In/Out marks auto-snap to new source range [200, 250]
+    assert window.clock.in_frame == 200
+    assert window.clock.out_frame == 250
 
     # 4. Playhead should jump to frame_in (200)
     assert window.clock.current_frame == 200
@@ -521,6 +521,61 @@ def test_tree_expand_collapse_single_click_and_state_preservation(qtbot):
     panel.refresh_tree()
     f1_item_refreshed = panel._find_item_by_id(f1.id)
     assert f1_item_refreshed.isExpanded() is True
+
+
+def test_start_at_option_shifts_frames(qtbot):
+    graph = SessionGraph()
+    s1 = SourceItem(
+        name="Shot01",
+        start_frame=1001,
+        end_frame=1050,
+        orig_start_frame=1001,
+        orig_end_frame=1050,
+    )
+    graph.sources[s1.id] = s1
+    graph.set_active_view(ViewType.SOURCE, s1.id)
+
+    panel = SourcesPanelWidget(graph)
+    qtbot.addWidget(panel)
+    panel.show()
+    panel.refresh_tree()
+    panel._refresh_subpanels()
+
+    # Initial state
+    assert panel.spin_start_at.value() == 1001
+    assert panel.combo_start_at.currentData() == 1001
+    assert s1.duration == 50
+
+    # 1. Select "Frame 1" preset
+    f1_idx = panel.combo_start_at.findData(1)
+    assert f1_idx >= 0
+    panel.combo_start_at.setCurrentIndex(f1_idx)
+
+    assert s1.start_frame == 1
+    assert s1.end_frame == 50
+    assert s1.duration == 50
+    assert panel.spin_in.value() == 1
+    assert panel.spin_out.value() == 50
+    assert panel.spin_start_at.value() == 1
+
+    # 2. Modify spin_start_at to custom frame 500
+    panel.spin_start_at.setValue(500)
+    assert s1.start_frame == 500
+    assert s1.end_frame == 549
+    assert s1.duration == 50
+    assert panel.spin_in.value() == 500
+    assert panel.spin_out.value() == 549
+    assert panel.combo_start_at.currentData() == "custom"
+
+    # 3. Select "Source Original" preset
+    orig_idx = panel.combo_start_at.findData("original")
+    assert orig_idx >= 0
+    panel.combo_start_at.setCurrentIndex(orig_idx)
+
+    assert s1.start_frame == 1001
+    assert s1.end_frame == 1050
+    assert s1.duration == 50
+    assert panel.spin_start_at.value() == 1001
 
 
 
