@@ -65,6 +65,7 @@ from openreview.color.ocio_manager import OCIOManager
 from openreview.color.lut_manager import CubeLut, AscCdl, ColorGradeSettings
 from openreview.ui.color_dialog import ColorAdjustmentsDialog, ColorAdjustmentsWidget
 from openreview.models.annotations import AnnotationStore, Stroke, ShapeType
+from openreview.models.annotation_stash import PerMediaAnnotations
 from openreview.models.comparison import ComparisonState, ComparisonMode
 from openreview.widgets.top_bar import TopControlBar
 from openreview.widgets.markup_tools import MarkupToolPalette
@@ -188,6 +189,8 @@ class MainWindow(QMainWindow):
         )
         self.ocio_manager = OCIOManager()
         self.annotation_store = AnnotationStore(self)
+        # Keeps each media's notes apart when the reviewer opens another (see _load_path).
+        self._annotation_stash = PerMediaAnnotations(self.annotation_store)
         self.comparison_state = ComparisonState()
         self.audio_engine = AudioEngine(self)
         self.sync_engine = DailiesSyncEngine(self)
@@ -3328,6 +3331,8 @@ class MainWindow(QMainWindow):
         # 5. Clear Annotations, Marks, Audio & State
         if hasattr(self, "annotation_store") and self.annotation_store:
             self.annotation_store.clear_all()
+        if hasattr(self, "_annotation_stash"):
+            self._annotation_stash.reset()
         if hasattr(self, "clock") and self.clock:
             self.clock.clear_all_bookmarks()
             self.clock.set_range(1001, 1200, reset_in_out=True)
@@ -3673,6 +3678,14 @@ class MainWindow(QMainWindow):
         )
 
     def _load_path(self, path: str) -> None:
+        """Open media. Notes drawn on the media being left stay with it; the one opened gets its own."""
+        before = getattr(self, "_current_media_path", None)
+        self._load_path_impl(path)
+        after = getattr(self, "_current_media_path", None)
+        if after and after != before:
+            self._annotation_stash.switch_to(str(after))
+
+    def _load_path_impl(self, path: str) -> None:
         if not path or not os.path.exists(path):
             return
 

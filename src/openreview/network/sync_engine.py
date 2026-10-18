@@ -5,7 +5,9 @@ color grade mirroring, and group review chat across studio workstations.
 """
 from __future__ import annotations
 
+import hmac
 import json
+import os
 from typing import Optional, List, Dict, Any, Set
 from PySide6.QtCore import QObject, Signal, QByteArray
 from PySide6.QtNetwork import QTcpServer, QTcpSocket, QHostAddress
@@ -48,6 +50,8 @@ class DailiesSyncEngine(QObject):
         self._client_sockets: List[QTcpSocket] = []
         self._client_names: Dict[QTcpSocket, str] = {}
         self._socket_buffers: Dict[QTcpSocket, bytearray] = {}
+        # Sockets that presented OPENREVIEW_SYNC_TOKEN in their JOIN (only used when the token is set).
+        self._authed_sockets: Set[QTcpSocket] = set()
 
         # Client components
         self._client_socket: Optional[QTcpSocket] = None
@@ -170,6 +174,7 @@ class DailiesSyncEngine(QObject):
         if socket in self._client_sockets:
             self._client_sockets.remove(socket)
         self._socket_buffers.pop(socket, None)
+        self._authed_sockets.discard(socket)
         try:
             socket.deleteLater()
         except RuntimeError:
@@ -216,6 +221,7 @@ class DailiesSyncEngine(QObject):
             "payload": {
                 "username": self._username,
                 "room_name": self._room_name,
+                "token": os.environ.get("OPENREVIEW_SYNC_TOKEN", ""),
             },
         })
 
@@ -312,6 +318,20 @@ class DailiesSyncEngine(QObject):
         msg_type = msg.get("type")
         sender = msg.get("sender", "Unknown")
         payload = msg.get("payload", {})
+
+        # Optional shared token: when OPENREVIEW_SYNC_TOKEN is set, a client must present it in its
+        # JOIN, and anything a socket sends before a good JOIN is ignored. Unset keeps the room open.
+        if self._mode == "host" and source_socket is not None:
+            required = os.environ.get("OPENREVIEW_SYNC_TOKEN", "")
+            if required:
+                if msg_type == "JOIN":
+                    supplied = payload.get("token", "") if isinstance(payload, dict) else ""
+                    if not isinstance(supplied, str) or not hmac.compare_digest(supplied.encode("utf-8"), required.encode("utf-8")):
+                        source_socket.disconnectFromHost()
+                        return
+                    self._authed_sockets.add(source_socket)
+                elif source_socket not in self._authed_sockets:
+                    return
 
         # If we are host, relay packet to all other client sockets
         if self._mode == "host":

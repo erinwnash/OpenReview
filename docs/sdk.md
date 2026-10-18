@@ -82,6 +82,39 @@ else:
 - **`clear_bookmarks() -> list[int]`**: Clears all bookmarks.
 - **`export_frame(destination: str, frame: Optional[int] = None) -> bool`**: Captures a viewport frame snapshot and writes it to disk.
 
+### Reading the notes drawn in the app (`get_annotations`)
+A control call for pipeline tools (the Roubo desktop-review integration uses it to bring a reviewer's notes back to the production tracker). There is no `OpenReviewClient` wrapper; call it over the JSON-RPC port (`127.0.0.1:45124`, one JSON object per line):
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "get_annotations", "params": {}}
+```
+
+The result describes the media that is open now:
+
+```json
+{
+  "firstFrame": 1001,
+  "frameWidthPx": 2048,
+  "frames": [
+    {"frame": 1010, "strokes": [{"shape_type": "pen", "points": [[0.1, 0.1], [0.5, 0.5]], "color": [255, 0, 0, 255], "width": 4.0, "text": ""}], "note": ""},
+    {"frame": 1020, "strokes": [], "note": "soften the edge"}
+  ]
+}
+```
+
+- `frame` is the media's own frame number (a sequence might start at 1001; a movie starts at 1). `firstFrame` is the first frame of the media.
+- `strokes` use `Stroke.to_dict()`: normalised `points` (0..1), `color` as `[r, g, b, a]` (0..255), `width` in pixels of the media frame (`frameWidthPx` wide).
+- Only frames that have a stroke or a note appear. With nothing drawn, `frames` is `[]`.
+- Notes belong to the media they were drawn on: opening other media does not carry them over, and coming back to a media brings its notes back.
+
+### Optional shared tokens
+Both network ports are open to anything that can reach them by default (the control port is loopback only). To require a shared secret, set an environment variable before starting OpenReview:
+
+- `OPENREVIEW_CONTROL_TOKEN`: every control call must then carry `"token": "<secret>"` in its `params`, or it is answered with error `-32001 Unauthorized`.
+- `OPENREVIEW_SYNC_TOKEN`: a client must then send `"token"` in the `payload` of its `JOIN`; a client that doesn't is disconnected, and a socket that hasn't joined is ignored. Clients started with the same variable send it automatically.
+
+Unset (the default) leaves both ports as they were.
+
 ---
 
 ## 3. DCC Integration Guides

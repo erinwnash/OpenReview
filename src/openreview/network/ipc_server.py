@@ -4,8 +4,10 @@ Enables programmatic external control via JSON-RPC 2.0 over TCP (e.g. from Nuke,
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import os
 from typing import Optional, Any, Dict
 from PySide6.QtCore import QObject, Signal, QByteArray
 from PySide6.QtNetwork import QTcpServer, QTcpSocket, QHostAddress
@@ -117,6 +119,18 @@ class IpcServer(QObject):
                 "id": req_id,
                 "error": {"code": -32600, "message": "Invalid Request: method is required"},
             }
+
+        # Optional shared token: when OPENREVIEW_CONTROL_TOKEN is set, every call must carry it
+        # as params.token. Unset (the default) leaves the port open to local processes as before.
+        expected = os.environ.get("OPENREVIEW_CONTROL_TOKEN", "")
+        if expected:
+            supplied = params.get("token")
+            if not isinstance(supplied, str) or not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32001, "message": "Unauthorized"},
+                }
 
         handler = getattr(self, f"_rpc_{method}", None)
         if handler is None:
@@ -275,6 +289,40 @@ class IpcServer(QObject):
             win.clock.clear_all_bookmarks()
             return {"bookmarks": []}
         return {}
+
+    @staticmethod
+    def _media_width(win: Any) -> int:
+        """Pixel width of the open media (line widths in annotations are in these pixels)."""
+        reader = getattr(win, "reader", None)
+        for attr in ("width", "_cached_width"):
+            w = getattr(reader, attr, None)
+            if isinstance(w, int) and w > 0:
+                return w
+        return 1920
+
+    def _rpc_get_annotations(self, params: dict) -> dict:
+        """The notes drawn on the open media: strokes and a note per frame.
+
+        Returns {"firstFrame", "frameWidthPx", "frames": [{"frame", "strokes", "note"}]}
+        where frame numbers are the media's own (a sequence might start at 1001) and
+        each stroke is Stroke.to_dict(). Only frames with a stroke or a note appear.
+        """
+        win = self.main_window
+        store = getattr(win, "annotation_store", None)
+        clock = getattr(win, "clock", None)
+        if store is None or clock is None:
+            return {"firstFrame": 1, "frameWidthPx": 1920, "frames": []}
+        frames = []
+        for f in store.get_annotated_frames():
+            strokes = [s.to_dict() for s in store.get_strokes(f)]
+            note = store.get_frame_note(f)
+            if strokes or note.strip():
+                frames.append({"frame": f, "strokes": strokes, "note": note})
+        return {
+            "firstFrame": int(clock.start_frame),
+            "frameWidthPx": self._media_width(win),
+            "frames": frames,
+        }
 
     def _rpc_export_frame(self, params: dict) -> dict:
         out_path = params.get("destination")
