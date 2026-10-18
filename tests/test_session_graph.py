@@ -85,6 +85,20 @@ def test_session_graph_stack_view():
     stk.compare_mode = "difference_inverted"
     assert stk.compare_mode == "difference_inverted"
 
+    # Verify that stack cycling only toggles between Layer A and Layer B
+    s3 = SourceItem(name="Version 3", path="/v3.mov")
+    s4 = SourceItem(name="Version 4", path="/v4.mov")
+    graph.sources[s3.id] = s3
+    graph.sources[s4.id] = s4
+    stk.source_ids = [s1.id, s2.id, s3.id, s4.id]
+    stk.index_a = 0
+    stk.index_b = 2  # Layer A is s1, Layer B is s3
+    stk.current_layer_index = 0
+    assert stk.cycle_forward() == 2
+    assert stk.cycle_forward() == 0
+    assert stk.cycle_forward() == 2
+    assert stk.cycle_backward() == 0
+
 
 def test_session_graph_layout_view():
     graph = SessionGraph()

@@ -293,6 +293,60 @@ class BackgroundDiskCacheTask(QRunnable):
             pass
 
 
+def create_reader_for_path(file_path: str) -> Optional[MediaReader]:
+    """Factory creating an appropriate MediaReader for a video, image sequence, or still image."""
+    if not file_path:
+        return None
+
+    path_str = str(file_path).strip()
+    if not path_str:
+        return None
+
+    # 1. Video Files (MP4, MOV, MKV, AVI, etc.)
+    try:
+        from openreview.core.video_reader import is_video_file, VideoMediaReader
+        if os.path.isfile(path_str) and is_video_file(path_str):
+            return VideoMediaReader(path_str)
+    except Exception:
+        pass
+
+    # 2. Image Sequences (explicit file, directory, or printf/hash pattern)
+    try:
+        from openreview.core.sequence_parser import detect_image_sequence, DiskSequenceReader
+        seq = detect_image_sequence(path_str)
+        if seq and len(seq.available_frames) > 0:
+            return DiskSequenceReader(seq)
+
+        # Handle hash patterns like /path/to/shot.####.exr or %04d where pattern string itself isn't a file
+        if ("#" in path_str or "%" in path_str) and not os.path.exists(path_str):
+            dir_name = os.path.dirname(path_str)
+            if os.path.isdir(dir_name):
+                seq_dir = detect_image_sequence(dir_name)
+                if seq_dir and len(seq_dir.available_frames) > 0:
+                    return DiskSequenceReader(seq_dir)
+    except Exception:
+        pass
+
+    # 3. Single Still Image File (EXR, DPX, TIFF, PNG, JPG, HDR, etc.)
+    if os.path.isfile(path_str):
+        try:
+            return DiskMediaReader(path_str)
+        except Exception:
+            pass
+
+    # 4. Directory containing single frame or fallback sequence
+    if os.path.isdir(path_str):
+        try:
+            from openreview.core.sequence_parser import detect_image_sequence, DiskSequenceReader
+            seq = detect_image_sequence(path_str)
+            if seq and len(seq.available_frames) > 0:
+                return DiskSequenceReader(seq)
+        except Exception:
+            pass
+
+    return None
+
+
 class ReaderEngine(QObject):
     """
     Coordinates asynchronous frame prefetching using QThreadPool.
@@ -303,6 +357,11 @@ class ReaderEngine(QObject):
 
     frame_ready = Signal(int)
     background_progress = Signal(str, int, int)  # (source_id, cached_count, total_count)
+
+    @staticmethod
+    def create_reader(file_path: str) -> Optional[MediaReader]:
+        """Create a MediaReader (video, sequence, or still image) for the given path."""
+        return create_reader_for_path(file_path)
 
     def __init__(self, reader: Optional[MediaReader], cache, parent: Optional[QObject] = None):
         super().__init__(parent)

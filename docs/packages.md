@@ -1,8 +1,9 @@
 # OpenReview Package & Plugin Management Guide
 
 **Author:** Maruthu Chakravarthi  
-**Version:** 1.0.0  
+**Version:** 1.0.1  
 **HTML Portal:** [docs/html/sdk.html](file:///e:/works/Pipeline/code/OpenReview/docs/html/sdk.html)
+
 
 OpenReview provides a modular extensibility system allowing studios and artists to create custom plugins, add menu actions, hook into playback events, and distribute packages across productions.
 
@@ -274,6 +275,14 @@ class HtmlReviewReportPlugin(OpenReviewPlugin):
         self.context.show_toast(f"Report saved: {out_html}", 4000)
 ```
 
+### 6.5 Built-in Production Reference Package: xtra-qc-Utils (`openreview/packages/builtin/comp_qc/`)
+OpenReview ships with `xtra-qc-Utils` as an integrated, built-in production package demonstrating advanced plugin architecture:
+- **Manifest (`manifest.json`):** Defines `id: "xtra-qc-Utils"`, name `"xtra QC Utils"`, version `"1.0.0"`, category `"Compositing QC"`.
+- **UI Registration:** Injects the dedicated right-dock and HUD panel (`Q`), complete with middle-mouse button Blender-style panning and collapsible accordion sections.
+- **GLSL Shader Uniform Hooking:** Binds live UI slider values directly to viewport GLSL fragment shader uniforms for Softclip Knee highlight compression, grain check isolation, high-pass edge filtering, and black level elevation.
+- **Asynchronous Plate & Matte Prefetching:** Manages background prefetch caches for external reference plates and RGBA mattes, updating real-time progress bars and aspect-fitted thumbnail previews.
+
 ---
 *Author: **Maruthu Chakravarthi***
+
 

@@ -200,6 +200,7 @@ def test_export_worker_async(qapp, temp_dir):
 
     worker.start()
     worker.wait(5000)
+    qapp.processEvents()
 
     assert len(completed) == 1
     assert os.path.exists(dest) and os.path.getsize(dest) > 0

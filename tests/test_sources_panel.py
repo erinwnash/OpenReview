@@ -578,4 +578,36 @@ def test_start_at_option_shifts_frames(qtbot):
     assert panel.spin_start_at.value() == 1001
 
 
+def test_sources_panel_stack_layers(qtbot, temp_media):
+    graph = SessionGraph()
+    panel = SourcesPanelWidget(graph)
+    qtbot.addWidget(panel)
+
+    s1 = graph.add_source_from_path(temp_media[0])
+    s2 = graph.add_source_from_path(temp_media[1])
+    s3 = graph.add_source_from_path(temp_media[0])
+
+    stk = graph.create_stack("CompStack", [s1.id, s2.id, s3.id])
+    assert stk.index_a == 0
+    assert stk.index_b == 1
+    assert stk.compare_mode == "switch"
+
+    panel.refresh_tree()
+    panel._refresh_subpanels()
+
+    # 1. Test selecting an input and setting Layer A via Set Layer A
+    panel.list_inputs.setCurrentRow(2)
+    panel._on_stack_set_a()
+    assert stk.index_a == 2
+    assert stk.current_layer_index == 2
+    assert "[A]" in panel.list_inputs.item(2).text()
+
+    # 2. Test setting Layer B via Set Layer B
+    panel.list_inputs.setCurrentRow(0)
+    panel._on_stack_set_b()
+    assert stk.index_b == 0
+    assert stk.current_layer_index == 0
+    assert "[B]" in panel.list_inputs.item(0).text()
+
+
 

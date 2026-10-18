@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/maruthuvfx/OpenReview/releases/latest"><img src="https://img.shields.io/badge/Release-v1.0.1-007acc?style=flat-square&logo=github" alt="Release v1.0.1" /></a>
+  <a href="https://github.com/maruthuvfx/OpenReview/releases/latest"><img src="https://img.shields.io/badge/Release-v1.1.0-007acc?style=flat-square&logo=github" alt="Release v1.1.0" /></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT" /></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=flat-square&logo=python" alt="Python 3.10+" /></a>
   <a href="https://www.qt.io/"><img src="https://img.shields.io/badge/GUI-PySide6%20%7C%20Qt6-green.svg?style=flat-square&logo=qt" alt="PySide6 / Qt6" /></a>
@@ -24,21 +24,28 @@
 
 **OpenReview** is an open-source, studio-grade visual effects (VFX) sequence playback, high-dynamic-range (HDR) color inspection, multi-source compositing comparison, and collaborative dailies review desktop workstation application. Built from the ground up on Python 3, PySide6 (Qt 6), and a dedicated OpenGL 3.3+ Core Profile rendering pipeline, OpenReview provides the raw performance, fidelity, and precision demanded by VFX supervisors, compositors, colorists, and lead artists.
 
+> **Explore the Documentation:**  
+> - 📖 **[Studio Feature Manual & One-on-One Technical Guide](docs/features.md)** — Exhaustive one-on-one breakdown of all studio capabilities across 12 domains.  
+> - 🌐 **[Interactive HTML Documentation Portal](docs/html/index.html)** — Rich visual documentation with embedded screenshots, architecture diagrams, and search.  
+> - ⚡ **[Complete 85+ Keyboard Shortcuts Matrix](docs/html/features.html#shortcuts-registry)** — Cross-referenced RV / Nuke / 3DEqualizer hotkey reference.
+
+
 ![OpenReview Main Workspace](docs/html/assets/screenshots/workspace_overview.png)
 *Figure 1: OpenReview unified workstation interface featuring the floating Color HUD, Sources Bin, high-precision Timeline Transport with cached RAM frame indicator, and 32-bit floating point viewport.*
+
 
 ---
 
 ## 📦 Binary Downloads & Distribution Matrix
 
-Pre-built standalone distributions for **OpenReview v1.0.1** are hosted directly on **[GitHub Releases](https://github.com/maruthuvfx/OpenReview/releases/tag/v1.0.1)**.
+Pre-built standalone distributions for **OpenReview v1.1.0** are hosted directly on **[GitHub Releases](https://github.com/maruthuvfx/OpenReview/releases/tag/v1.1.0)**.
 
 | Platform / Edition | Package Format | Target Architecture | Description | Download |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows 64-bit** | `.msi` Installer | `x86_64` (Win 10/11) | Full interactive Windows installer with Start Menu shortcut, desktop icon, and file associations. | [**Download .msi**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.1/OpenReview-1.0.1-win64.msi) |
-| **Windows 64-bit Portable** | `.zip` Archive | `x86_64` (Win 10/11) | Zero-install standalone directory. Unzip anywhere and double-click `OpenReview.exe` to run. | [**Download .zip**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.1/OpenReview-1.0.1-win64-portable.zip) |
-| **Linux (Debian / Ubuntu)** | `.deb` Package | `amd64` (Ubuntu 20.04+, Debian 11+) | Native Debian package installing desktop integration, `/opt/openreview`, and terminal launcher. | [**Download .deb**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.1/openreview_1.0.1_amd64.deb) |
-| **Linux (RHEL / Fedora)** | `.rpm` Package | `x86_64` (RHEL 8/9, Rocky, Fedora) | Standard RedHat package with system desktop entry, MIME types, and icon deployment. | [**Download .rpm**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.0.1/openreview-1.0.1-1.x86_64.rpm) |
+| **Windows 64-bit** | `.msi` Installer | `x86_64` (Win 10/11) | Full interactive Windows installer with Start Menu shortcut, desktop icon, and file associations. | [**Download .msi**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.1.0/OpenReview-1.1.0-win64.msi) |
+| **Windows 64-bit Portable** | `.zip` Archive | `x86_64` (Win 10/11) | Zero-install standalone directory. Unzip anywhere and double-click `OpenReview.exe` to run. | [**Download .zip**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.1.0/OpenReview-1.1.0-win64-portable.zip) |
+| **Linux (Debian / Ubuntu)** | `.deb` Package | `amd64` (Ubuntu 20.04+, Debian 11+) | Native Debian package installing desktop integration, `/opt/openreview`, and terminal launcher. | [**Download .deb**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.1.0/openreview_1.1.0_amd64.deb) |
+| **Linux (RHEL / Fedora)** | `.rpm` Package | `x86_64` (RHEL 8/9, Rocky, Fedora) | Standard RedHat package with system desktop entry, MIME types, and icon deployment. | [**Download .rpm**](https://github.com/maruthuvfx/OpenReview/releases/download/v1.1.0/openreview-1.1.0-1.x86_64.rpm) |
 | **Python Source** | PyPI / Editable | Cross-platform | Run directly from source in any Python 3.10+ virtual environment. | `pip install -e .` |
 
 ---
@@ -92,6 +99,16 @@ Pre-built standalone distributions for **OpenReview v1.0.1** are hosted directly
   <p align="center"><em><strong>Figure 7: Collaborative Remote Dailies Sync</strong><br>TCP room hosting and client connectivity for real-time multi-artist frame scrubbing and dailies review.</em></p>
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/html/assets/screenshots/hud_comp_qc.png" alt="xtra QC Utils Suite" />
+  <p align="center"><em><strong>Figure 8: xtra QC Utils Suite (`Q`)</strong><br>Technical compositing QC featuring Softclip Knee, grain checks, high-pass edge filters, black level elevation, and HSL solos.</em></p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/html/assets/screenshots/dialog_about.png" alt="About Dialog & Licenses" />
+  <p align="center"><em><strong>Figure 9: Studio About & License Inspector (`F1`)</strong><br>Comprehensive architecture telemetry, author attribution (Maruthu Chakravarthi), and interactive open-source license browser.</em></p>
+</td>
+</tr>
 </table>
 
 ---
@@ -122,6 +139,7 @@ Pre-built standalone distributions for **OpenReview v1.0.1** are hosted directly
 | **Stacks** | Cycle Stack Layer (Prev / Next) | `Z` / `Shift+Z` | `Alt+Up` / `Alt+Down` (Version) |
 | **HUDs** | Toggle Sources Bin / File Browser | `` ` `` (Backtick) | `Ctrl+B` |
 | **HUDs** | A/B Split Wipe Toggle / Wipe Angle | `W` | `Shift+W` (Flip Orientation) |
+| **HUDs** | **Toggle xtra QC Utils Suite (Comp QC)** | **`Q`** | |
 | **HUDs** | Color Inspector & Area Analyzer | `F5` | `Alt+C` |
 | **HUDs** | Histogram / Source Details | `H` | `I` |
 | **HUDs** | Remote Dailies Sync Room | `Ctrl+Shift+D` | |
@@ -131,6 +149,8 @@ Pre-built standalone distributions for **OpenReview v1.0.1** are hosted directly
 | **Sessions** | Close & Clear Session | `Ctrl+Shift+N` | `Ctrl+N` (New Session) |
 | **Export** | Comprehensive Media Exporter | `Ctrl+Shift+E` | |
 | **Cache** | Clear RAM Cache / Clear All Sources Cache | `Ctrl+Shift+C` | `Ctrl+Delete` |
+| **Help** | **About Dialog & Dependency Licenses** | **`F1`** | |
+
 
 ---
 

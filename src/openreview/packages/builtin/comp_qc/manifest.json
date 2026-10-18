@@ -1,0 +1,9 @@
+{
+  "name": "xtra-qc-Utils",
+  "version": "1.0.0",
+  "author": "OpenReview Team",
+  "description": "Comprehensive compositing quality control and technical review toolset. Features non-destructive diagnostic color adjustments (Gamma, Gain, Softclip Knee highlight compression, Saturation), specialized inspection filters (Grain Check, High-Pass, Black Levels, Negative and NaN pixels, HSL soloing), side-by-side plate comparison with Difference overlay, and advanced RGBA matte inspection with custom channel expressions, alpha overlays, and checkerboard analysis.",
+  "entrypoint": "plugin.py",
+  "min_openreview_version": "0.1.0",
+  "enabled": false
+}

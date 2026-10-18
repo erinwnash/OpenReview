@@ -331,6 +331,33 @@ QSplitter::handle:hover {
     background: #e5a823;
 }
 
+/* Tabified Dock Tabs */
+QDockWidget {
+    color: #d8d8d8;
+}
+
+QTabBar::tab {
+    background: #1e1e1e;
+    color: #888888;
+    border: 1px solid #333333;
+    border-bottom: 2px solid transparent;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: bold;
+    min-width: 60px;
+}
+
+QTabBar::tab:selected {
+    background: #282828;
+    color: #e5a823;
+    border-bottom: 2px solid #e5a823;
+}
+
+QTabBar::tab:hover:!selected {
+    background: #242424;
+    color: #cccccc;
+}
+
 /* Color Dialog (QColorDialog) */
 QColorDialog {
     background-color: #1e1e1e;

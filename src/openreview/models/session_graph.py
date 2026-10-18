@@ -46,6 +46,8 @@ class SourceItem:
     orig_end_frame: Optional[int] = None
     manual_in: Optional[int] = None
     manual_out: Optional[int] = None
+    is_proxy: bool = False
+    proxy_resolved: bool = True
 
     def __post_init__(self):
         if self.orig_start_frame is None:
@@ -109,6 +111,8 @@ class SourceItem:
             "colorspace": self.colorspace,
             "codec": self.codec,
             "parent_folder_id": self.parent_folder_id,
+            "is_proxy": self.is_proxy,
+            "proxy_resolved": self.proxy_resolved,
         }
 
     @classmethod
@@ -134,6 +138,8 @@ class SourceItem:
             orig_end_frame=int(data.get("orig_end_frame", ef)),
             manual_in=int(m_in) if m_in is not None else None,
             manual_out=int(m_out) if m_out is not None else None,
+            is_proxy=bool(data.get("is_proxy", False)),
+            proxy_resolved=bool(data.get("proxy_resolved", True)),
         )
 
 
@@ -302,7 +308,7 @@ class StackView:
     index_b: int = 1
     current_layer_index: int = 0
     # compare_mode: "wipe", "switch", "split", "difference", "difference_inverted", "over", "add"
-    compare_mode: str = "over"
+    compare_mode: str = "switch"
     wipe_position: float = 0.5
     wipe_angle_deg: float = 0.0
     diff_boost: float = 1.0
@@ -313,20 +319,23 @@ class StackView:
     manual_out: Optional[int] = None
 
     def cycle_forward(self) -> int:
-        """Cycle to next layer in stack. Returns new current layer index."""
+        """Cycle strictly between Layer A and Layer B in stack."""
         if not self.source_ids:
             self.current_layer_index = 0
             return 0
-        self.current_layer_index = (self.current_layer_index + 1) % len(self.source_ids)
+        if len(self.source_ids) == 1:
+            self.current_layer_index = 0
+            return 0
+        # If currently at index_a, toggle to index_b if valid, otherwise toggle back to index_a
+        if self.current_layer_index == self.index_a and 0 <= self.index_b < len(self.source_ids):
+            self.current_layer_index = self.index_b
+        else:
+            self.current_layer_index = self.index_a if 0 <= self.index_a < len(self.source_ids) else 0
         return self.current_layer_index
 
     def cycle_backward(self) -> int:
-        """Cycle to previous layer in stack. Returns new current layer index."""
-        if not self.source_ids:
-            self.current_layer_index = 0
-            return 0
-        self.current_layer_index = (self.current_layer_index - 1) % len(self.source_ids)
-        return self.current_layer_index
+        """Cycle strictly between Layer A and Layer B in stack."""
+        return self.cycle_forward()
 
     def get_current_layer(self, sources_map: Dict[str, SourceItem]) -> Optional[SourceItem]:
         if 0 <= self.current_layer_index < len(self.source_ids):
@@ -393,7 +402,7 @@ class StackView:
             index_a=int(data.get("index_a", 0)),
             index_b=int(data.get("index_b", 1)),
             current_layer_index=int(data.get("current_layer_index", 0)),
-            compare_mode=data.get("compare_mode", "over"),
+            compare_mode=data.get("compare_mode", "switch"),
             wipe_position=float(data.get("wipe_position", 0.5)),
             wipe_angle_deg=float(data.get("wipe_angle_deg", 0.0)),
             diff_boost=float(data.get("diff_boost", 1.0)),
@@ -552,6 +561,29 @@ def detect_media_colorspace(file_path: str, ext: str) -> str:
         pass
 
     return "sRGB (Texture/Video)"
+
+
+def create_proxy_source_item(path: str, parent_folder_id: Optional[str] = None) -> SourceItem:
+    """
+    Instantiate an immediate lightweight placeholder SourceItem (modeled on Open RV movieProxie)
+    enabling zero-latency UI timeline appearance while background worker threads probe metadata.
+    """
+    name = os.path.basename(path) if path else "Loading..."
+    return SourceItem(
+        name=name,
+        path=path,
+        media_type="sequence" if ("#" in name or "%" in name) else "video",
+        start_frame=1,
+        end_frame=24,
+        fps=24.0,
+        width=1920,
+        height=1080,
+        colorspace="sRGB (Texture/Video)",
+        codec="Probing...",
+        parent_folder_id=parent_folder_id,
+        is_proxy=True,
+        proxy_resolved=False,
+    )
 
 
 def build_source_item_from_path(path: str, parent_folder_id: Optional[str] = None) -> Optional[SourceItem]:
@@ -930,7 +962,7 @@ class SessionGraph(QObject):
         self.graph_changed.emit()
         return seq
 
-    def create_stack(self, name: str = "New Stack", source_ids: Optional[List[str]] = None, compare_mode: str = "over") -> StackView:
+    def create_stack(self, name: str = "New Stack", source_ids: Optional[List[str]] = None, compare_mode: str = "switch") -> StackView:
         sids = list(source_ids or [])
         stk = StackView(name=name, source_ids=sids, compare_mode=compare_mode)
         if len(sids) >= 2:

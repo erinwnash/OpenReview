@@ -224,12 +224,8 @@ class MediaExporter:
 
         if ext == ".tga":
             arr_8 = MediaExporter._to_uint8(image_data)
-            if HAS_CV2:
-                bgr = cv2.cvtColor(arr_8, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(str(p), bgr)
-            else:
-                img = Image.fromarray(arr_8)
-                img.save(str(p))
+            img = Image.fromarray(arr_8)
+            img.save(str(p))
             return
 
         arr_8 = MediaExporter._to_uint8(image_data)
@@ -375,10 +371,10 @@ class MediaExporter:
                     progress_callback(i + 1, total)
 
             proc.stdin.close()
-            proc.wait()
+            stdout_data, stderr_data = proc.communicate(timeout=60)
             if proc.returncode != 0:
-                stderr = proc.stderr.read().decode("utf-8", errors="ignore")
-                raise RuntimeError(f"FFmpeg export failed (code {proc.returncode}): {stderr}")
+                stderr_text = stderr_data.decode("utf-8", errors="ignore") if stderr_data else ""
+                raise RuntimeError(f"FFmpeg export failed (code {proc.returncode}): {stderr_text}")
         except Exception as e:
             if proc.poll() is None:
                 proc.kill()
@@ -433,6 +429,53 @@ class MediaExporter:
         return saved_paths
 
     @staticmethod
+    def _build_smooth_bezier_path(points: list) -> Any:
+        from PySide6.QtGui import QPainterPath
+        from PySide6.QtCore import QPointF
+        path = QPainterPath()
+        if not points:
+            return path
+        if len(points) == 1:
+            path.moveTo(points[0])
+            path.lineTo(points[0])
+            return path
+        if len(points) == 2:
+            path.moveTo(points[0])
+            path.lineTo(points[1])
+            return path
+
+        filtered = [points[0]]
+        for p in points[1:]:
+            dx = p.x() - filtered[-1].x()
+            dy = p.y() - filtered[-1].y()
+            if dx * dx + dy * dy >= 2.25:
+                filtered.append(p)
+        if len(filtered) < 2:
+            filtered = [points[0], points[-1]]
+
+        n = len(filtered)
+        if n == 2:
+            path.moveTo(filtered[0])
+            path.lineTo(filtered[1])
+            return path
+
+        p_prev = QPointF(2.0 * filtered[0].x() - filtered[1].x(), 2.0 * filtered[0].y() - filtered[1].y())
+        p_next = QPointF(2.0 * filtered[-1].x() - filtered[-2].x(), 2.0 * filtered[-1].y() - filtered[-2].y())
+        pts = [p_prev] + filtered + [p_next]
+
+        path.moveTo(filtered[0])
+        for i in range(1, n):
+            p0 = pts[i - 1]
+            p1 = pts[i]
+            p2 = pts[i + 1]
+            p3 = pts[i + 2]
+            c1 = QPointF(p1.x() + (p2.x() - p0.x()) / 6.0, p1.y() + (p2.y() - p0.y()) / 6.0)
+            c2 = QPointF(p2.x() - (p3.x() - p1.x()) / 6.0, p2.y() - (p3.y() - p1.y()) / 6.0)
+            path.cubicTo(c1, c2, p2)
+
+        return path
+
+    @staticmethod
     def render_strokes_on_image(base_img: np.ndarray, strokes: list) -> np.ndarray:
         """
         Renders vector markup strokes directly onto a base image at native image resolution,
@@ -480,11 +523,7 @@ class MediaExporter:
                 if len(pts) == 1:
                     painter.drawPoint(pts[0])
                 else:
-                    from PySide6.QtGui import QPainterPath
-                    path = QPainterPath()
-                    path.moveTo(pts[0])
-                    for pt in pts[1:]:
-                        path.lineTo(pt)
+                    path = MediaExporter._build_smooth_bezier_path(pts)
                     painter.drawPath(path)
 
             elif stroke.shape_type == ShapeType.LINE and len(pts) >= 2:

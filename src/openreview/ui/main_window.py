@@ -8,7 +8,10 @@ from __future__ import annotations
 import os
 import sys
 import colorsys
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from typing import Optional, List, Dict, Any, Set
 import numpy as np
 from PySide6.QtCore import Qt, QPoint, QTimer
@@ -30,6 +33,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QInputDialog,
+    QTabWidget,
 )
 
 from openreview.core.clock import PlaybackClock
@@ -70,6 +74,7 @@ from openreview.widgets.floating_hud import FloatingHUDCard
 from openreview.widgets.hud_histogram import HistogramHUD
 from openreview.widgets.hud_wipe import WipeComparisonHUD
 from openreview.widgets.hud_color_inspector import ColorInspectorHUD
+from openreview.packages.builtin.comp_qc.qc_state import QcMode
 from openreview.ui.image_info_dialog import ImageInfoDialog, ImageInfoWidget
 from openreview.ui.process_info_dialog import ProcessInfoDialog
 from openreview.ui.goto_frame_dialog import GoToFrameDialog
@@ -92,12 +97,17 @@ from openreview.models.session_graph import (
 )
 from openreview.ui.sources_panel import SourcesPanelWidget, SourcesDockWidget
 from openreview.ui.file_browser_panel import FileBrowserDockWidget, FileBrowserPanelWidget
+from openreview.packages.builtin.comp_qc.hud_comp_qc import CompQCDockWidget
+from openreview.packages.builtin.comp_qc.qc_state import CompQCState
 from openreview.core.console_logger import ConsoleLogManager, LogEntry
 from openreview.ui.console_window import ConsoleWindow
 from openreview.core.layout_compositor import composite_layout_grid
 from openreview.core.version_control import get_next_version, get_prev_version, get_version_summary
 from openreview.core.timecode import frame_to_timecode
 from openreview.ui.theme import get_3dequalizer_stylesheet
+
+import logging
+logger = logging.getLogger("openreview")
 
 
 class MainWindow(QMainWindow):
@@ -149,6 +159,9 @@ class MainWindow(QMainWindow):
         self.clock.set_play_all_frames(getattr(prefs, "play_all_frames", True))
         initial_cache_mode = CacheMode(getattr(prefs, "default_cache_mode", "off"))
         self._last_active_cache_mode = CacheMode.PLAY_AHEAD
+        self._active_view_is_sequence: bool = False
+        self._pre_sequence_cache_mode: Optional[CacheMode] = None
+        self._pre_sequence_cache_started: Optional[bool] = None
         use_auto_ram = getattr(prefs, "auto_ram_budget", True)
         disk_cache_dir = getattr(prefs, "disk_cache_dir", "") or None
         enable_disk = getattr(prefs, "enable_disk_cache", True)
@@ -298,6 +311,8 @@ class MainWindow(QMainWindow):
         )
         self.setCorner(Qt.Corner.BottomLeftCorner, Qt.DockWidgetArea.BottomDockWidgetArea)
         self.setCorner(Qt.Corner.BottomRightCorner, Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.setTabPosition(Qt.DockWidgetArea.RightDockWidgetArea, QTabWidget.TabPosition.North)
+        self.setTabPosition(Qt.DockWidgetArea.LeftDockWidgetArea, QTabWidget.TabPosition.North)
 
         # 1. Top Controls Toolbar (Dockable, Movable, Floatable)
         self.top_toolbar = QToolBar("Top Controls", self)
@@ -339,8 +354,27 @@ class MainWindow(QMainWindow):
         self.file_browser_dock.hide()
         self.resizeDocks([self.file_browser_dock], [420], Qt.Orientation.Horizontal)
 
+        # 2c. Inbuilt xtra QC Utils Right Dock Panel (Hold Q, default on Right, 380px width)
+        self.comp_qc_state = CompQCState()
+        self.comp_qc_dock = CompQCDockWidget(self.comp_qc_state, self)
+        if hasattr(self.comp_qc_dock, "panel"):
+            p = self.comp_qc_dock.panel
+            if hasattr(p, "source_plate_dropped"):
+                p.source_plate_dropped.connect(self._on_comp_qc_source_dropped)
+                p.source_prefetch_requested.connect(self._on_comp_qc_prefetch_source)
+                p.source_unload_requested.connect(self._on_comp_qc_unload_source)
+                p.matte_dropped.connect(self._on_comp_qc_matte_dropped)
+                p.matte_prefetch_requested.connect(self._on_comp_qc_prefetch_matte)
+                p.matte_unload_requested.connect(self._on_comp_qc_unload_matte)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.comp_qc_dock)
+        self.comp_qc_dock.hide()
+        self.resizeDocks([self.comp_qc_dock], [380], Qt.Orientation.Horizontal)
+        self.tabifyDockWidget(self.file_browser_dock, self.comp_qc_dock)
+
         # 3. Maximized Viewport Canvas (Sole Central Widget)
         self.viewport = ViewportCanvas(self.annotation_store, self)
+        self.viewport.comp_qc_state = self.comp_qc_state
+        self.comp_qc_state.changed.connect(self._on_comp_qc_state_changed)
         self.viewport.contact_sheet_tile_double_clicked.connect(self._on_exr_contact_sheet_tile_double_clicked)
         self.top_bar.scrub_mode_toggled.connect(self._on_scrub_mode_toggled)
         self.viewport.scrub_requested.connect(self._on_viewport_scrub)
@@ -1398,6 +1432,7 @@ class MainWindow(QMainWindow):
         sm.bind_callback("hud.stereo", lambda: self.hud_stereo.setVisible(not self.hud_stereo.isVisible()))
         sm.bind_callback("hud.toggle_file_browser", self._on_toggle_file_browser)
         sm.bind_callback("hud.console", self._on_toggle_console_window)
+        sm.bind_callback("hud.comp_qc", self._on_toggle_comp_qc)
 
         # Annotations
         sm.bind_callback("annot.toggle_pen", self.markup_palette.toggle_draw)
@@ -1487,10 +1522,61 @@ class MainWindow(QMainWindow):
                 return
             return
 
+        # Direct Q hotkey (Hold to peek, click/pin to latch)
+        if not event.isAutoRepeat() and event.key() == Qt.Key.Key_Q and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            if hasattr(self, "pkg_mgr") and self.pkg_mgr and not self.pkg_mgr.is_plugin_enabled("xtra-qc-Utils"):
+                return
+            dock = getattr(self, "comp_qc_dock", None)
+            if dock is not None:
+                self._q_key_held = True
+                if dock.isHidden():
+                    dock.show()
+                    if (hasattr(self, "file_browser_dock") and
+                        self.dockWidgetArea(self.file_browser_dock) == self.dockWidgetArea(dock) and
+                        not self.file_browser_dock.isFloating() and not dock.isFloating()):
+                        self.tabifyDockWidget(self.file_browser_dock, dock)
+                    dock.raise_()
+                event.accept()
+                return
+
+        # Direct O or 0 hotkey for Overlay Matte toggle
+        if not event.isAutoRepeat() and event.key() in (Qt.Key.Key_O, Qt.Key.Key_0) and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            if hasattr(self, "pkg_mgr") and self.pkg_mgr and not self.pkg_mgr.is_plugin_enabled("xtra-qc-Utils"):
+                return
+            if hasattr(self, "comp_qc_state") and self.comp_qc_state:
+                self.comp_qc_state.overlay_matte_enabled = not self.comp_qc_state.overlay_matte_enabled
+                st = "Enabled" if self.comp_qc_state.overlay_matte_enabled else "Disabled"
+                self.statusBar().showMessage(f"xtra QC: Overlay Matte {st}", 2000)
+                dock = getattr(self, "comp_qc_dock", None)
+                panel = getattr(dock, "panel", dock) if dock else getattr(self, "hud_comp_qc", None)
+                if panel and hasattr(panel, "btn_overlay_matte"):
+                    panel.btn_overlay_matte.blockSignals(True)
+                    panel.btn_overlay_matte.setChecked(self.comp_qc_state.overlay_matte_enabled)
+                    panel.btn_overlay_matte.blockSignals(False)
+                self._sync_matte_frame()
+                self.viewport.update()
+                event.accept()
+                return
+
         if self.shortcut_mgr.eventFilter(self, event):
             return
 
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        """Handle key release events, closing QC dock if unlatched when releasing Q."""
+        if not event.isAutoRepeat() and event.key() == Qt.Key.Key_Q:
+            if hasattr(self, "pkg_mgr") and self.pkg_mgr and not self.pkg_mgr.is_plugin_enabled("xtra-qc-Utils"):
+                return
+            self._q_key_held = False
+            dock = getattr(self, "comp_qc_dock", None)
+            if dock is not None and not dock.isHidden():
+                # Only close if NOT latched / pinned by user interaction
+                if not getattr(dock, "is_latched", lambda: False)():
+                    dock.hide()
+                    event.accept()
+                    return
+        super().keyReleaseEvent(event)
 
     # --------------------------------------------------------------------------
     # Signal Wiring
@@ -1636,6 +1722,7 @@ class MainWindow(QMainWindow):
                     data = self._normalize_frame_data(reader.read_frame(src_frame)) if reader else None
                     if self.cache.mode != CacheMode.OFF and data is not None:
                         self.cache.put_source_frame(source.id, src_frame, data)
+            self.viewport.comparison_state.channels_a = (True, True, True, True)
             self.viewport.set_reference_frame(None)
             self.viewport.set_primary_frame(frame, data)
             if data is not None and hasattr(data, "shape") and len(data.shape) >= 2:
@@ -1644,13 +1731,32 @@ class MainWindow(QMainWindow):
                 self.hist_widget.update_frame(data)
 
         elif isinstance(viewable, StackView):
-            # Check if comparison mode (Wipe/Split/Difference/Over) is active
-            if self.viewport.comparison_state.mode != ComparisonMode.OFF:
+            is_switch_layer_b = (viewable.compare_mode == "switch" and viewable.current_layer_index == viewable.index_b)
+            if is_switch_layer_b:
+                # Solo Layer B display (toggled with Z) - strictly guaranteed full RGBA
+                layer_b = viewable.get_layer_b(self.session_graph.sources)
+                data_b = None
+                if layer_b:
+                    self.cache.set_active_source(layer_b.id)
+                    data_b = self.cache.get_source_frame(layer_b.id, frame)
+                    if data_b is None and sync_read_allowed:
+                        reader_b = self._get_reader_for_source(layer_b)
+                        data_b = self._normalize_frame_data(reader_b.read_frame(frame)) if reader_b else None
+                        if self.cache.mode != CacheMode.OFF and data_b is not None:
+                            self.cache.put_source_frame(layer_b.id, frame, data_b)
+                self.viewport.comparison_state.mode = ComparisonMode.OFF
+                self.viewport.comparison_state.channels_a = (True, True, True, True)
+                self.viewport.set_reference_frame(None)
+                self.viewport.set_primary_frame(frame, data_b)
+                disp_data = data_b
+            else:
+                # Normal comparison or Layer A mixed over Layer B (in "switch" or "over")
                 layer_a = viewable.get_layer_a(self.session_graph.sources)
                 layer_b = viewable.get_layer_b(self.session_graph.sources)
                 data_a = None
                 data_b = None
                 if layer_a:
+                    self.cache.set_active_source(layer_a.id)
                     data_a = self.cache.get_source_frame(layer_a.id, frame)
                     if data_a is None and sync_read_allowed:
                         reader_a = self._get_reader_for_source(layer_a)
@@ -1664,24 +1770,26 @@ class MainWindow(QMainWindow):
                         data_b = self._normalize_frame_data(reader_b.read_frame(frame)) if reader_b else None
                         if self.cache.mode != CacheMode.OFF and data_b is not None:
                             self.cache.put_source_frame(layer_b.id, frame, data_b)
+
+                mode_map = {
+                    "wipe": ComparisonMode.WIPE,
+                    "switch": ComparisonMode.OVER,
+                    "split": ComparisonMode.SPLIT,
+                    "difference": ComparisonMode.DIFFERENCE,
+                    "difference_inverted": ComparisonMode.DIFFERENCE_INVERTED,
+                    "over": ComparisonMode.OVER,
+                    "add": ComparisonMode.ADD,
+                }
+                comp_mode = mode_map.get(viewable.compare_mode, ComparisonMode.OVER)
+                if layer_b is None:
+                    comp_mode = ComparisonMode.OFF
+
+                self.viewport.comparison_state.mode = comp_mode
+                self.viewport.comparison_state.stack_mix = getattr(viewable, "stack_mix", 1.0)
+                self.viewport.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
                 self.viewport.set_primary_frame(frame, data_a)
                 self.viewport.set_reference_frame(data_b)
                 disp_data = data_a
-            else:
-                # Solo layer display (cycle through layers with Z / Shift+Z)
-                current_layer = viewable.get_current_layer(self.session_graph.sources)
-                data = None
-                if current_layer:
-                    self.cache.set_active_source(current_layer.id)
-                    data = self.cache.get_source_frame(current_layer.id, frame)
-                    if data is None and sync_read_allowed:
-                        reader = self._get_reader_for_source(current_layer)
-                        data = self._normalize_frame_data(reader.read_frame(frame)) if reader else None
-                        if self.cache.mode != CacheMode.OFF and data is not None:
-                            self.cache.put_source_frame(current_layer.id, frame, data)
-                self.viewport.set_reference_frame(None)
-                self.viewport.set_primary_frame(frame, data)
-                disp_data = data
 
             if disp_data is not None and hasattr(disp_data, "shape") and len(disp_data.shape) >= 2:
                 self._update_resolution_status(f"{disp_data.shape[1]}x{disp_data.shape[0]}")
@@ -1741,8 +1849,16 @@ class MainWindow(QMainWindow):
                     if self.cache.mode != CacheMode.OFF and data is not None:
                         self.cache.put_frame(frame, data)
 
-            # Check if wipe comparison is active between 2 selected sources
-            if self.viewport.comparison_state.mode != ComparisonMode.OFF:
+            # Check if wipe comparison is active between 2 selected sources or QC comparison
+            qc = getattr(self, "comp_qc_state", None)
+            is_qc_compare = qc is not None and (
+                getattr(qc, "compare_plates", False)
+                or getattr(qc, "compare_against_plate", False)
+                or getattr(qc, "qc_mode", 0) in (QcMode.HIGHPASS_PLATE, QcMode.COMP_DIFF_PLATE)
+            )
+            needs_b = (self.viewport.comparison_state.mode != ComparisonMode.OFF) or is_qc_compare
+
+            if needs_b:
                 selected_sids = []
                 if hasattr(self, "sources_dock"):
                     selected_sids = self.sources_dock.panel._get_selected_source_ids()
@@ -1750,7 +1866,7 @@ class MainWindow(QMainWindow):
                 if len(selected_sids) >= 2:
                     ref_id = selected_sids[1] if selected_sids[0] == cur_src_id else selected_sids[0]
                     ref_src = self.session_graph.sources.get(ref_id)
-                elif len(self.session_graph.sources) > 1:
+                elif len(self.session_graph.sources) > 1 and not is_qc_compare:
                     for sid, s in self.session_graph.sources.items():
                         if sid != cur_src_id:
                             ref_src = s
@@ -1759,13 +1875,24 @@ class MainWindow(QMainWindow):
                     d_b = self.cache.get_source_frame(ref_src.id, frame)
                     if d_b is None:
                         r_b = self._get_reader_for_source(ref_src)
-                        d_b = r_b.read_frame(frame) if r_b else None
+                        d_b = self._normalize_frame_data(r_b.read_frame(frame)) if r_b else None
                         if self.cache.mode != CacheMode.OFF and d_b is not None:
                             self.cache.put_source_frame(ref_src.id, frame, d_b)
                     self.viewport.set_reference_frame(d_b)
+                elif hasattr(self, "_reader_b") and self._reader_b is not None:
+                    mapped_b = self._resolve_qc_frame(self._reader_b, frame)
+                    b_sid = getattr(qc, "source_item_id", None)
+                    d_b = None
+                    if b_sid:
+                        d_b = self.cache.get_source_frame(b_sid, mapped_b)
+                    if d_b is None and sync_read_allowed:
+                        d_b = self._normalize_frame_data(self._reader_b.read_frame(mapped_b))
+                        if b_sid and self.cache.mode != CacheMode.OFF and d_b is not None:
+                            self.cache.put_source_frame(b_sid, mapped_b, d_b)
+                    self.viewport.set_reference_frame(d_b)
                 else:
                     self.viewport.set_reference_frame(None)
-            else:
+            elif getattr(self.viewport, "_image_b", None) is not None:
                 self.viewport.set_reference_frame(None)
 
             if data is not None and hasattr(data, "shape") and len(data.shape) >= 2:
@@ -1773,6 +1900,9 @@ class MainWindow(QMainWindow):
             self.viewport.set_primary_frame(frame, data)
             if self.hud_hist.isVisible() and data is not None:
                 self.hist_widget.update_frame(data)
+
+        # Synchronize matte frame if loaded in xtra QC Utils AND actively used
+        self._sync_matte_frame(frame, sync_read_allowed=sync_read_allowed)
 
         # Broadcast playback if connected as presenter / host
         if self.sync_engine.is_connected and (self.sync_engine.is_presenter or self.sync_engine.is_host):
@@ -1798,20 +1928,18 @@ class MainWindow(QMainWindow):
                 return [(src.id, sf, self._get_reader_for_source(src))]
             return []
         elif isinstance(viewable, StackView):
-            if self.viewport.comparison_state.mode != ComparisonMode.OFF:
-                la = viewable.get_layer_a(self.session_graph.sources)
-                lb = viewable.get_layer_b(self.session_graph.sources)
-                res = []
-                if la:
-                    res.append((la.id, timeline_frame, self._get_reader_for_source(la)))
-                if lb:
-                    res.append((lb.id, timeline_frame, self._get_reader_for_source(lb)))
-                return res
-            else:
+            la = viewable.get_layer_a(self.session_graph.sources)
+            lb = viewable.get_layer_b(self.session_graph.sources)
+            res = []
+            if la:
+                res.append((la.id, timeline_frame, self._get_reader_for_source(la)))
+            if lb and (not la or lb.id != la.id):
+                res.append((lb.id, timeline_frame, self._get_reader_for_source(lb)))
+            if not res:
                 cur = viewable.get_current_layer(self.session_graph.sources)
                 if cur:
-                    return [(cur.id, timeline_frame, self._get_reader_for_source(cur))]
-                return []
+                    res.append((cur.id, timeline_frame, self._get_reader_for_source(cur)))
+            return res
         elif isinstance(viewable, LayoutView):
             res = []
             for sid in viewable.source_ids:
@@ -1938,19 +2066,21 @@ class MainWindow(QMainWindow):
                         elif self.cache.has_source_frame_disk(src.id, sf):
                             disk_cached.add(f)
         elif isinstance(viewable, StackView):
-            if self.viewport.comparison_state.mode != ComparisonMode.OFF:
-                la = viewable.get_layer_a(self.session_graph.sources)
-                lb = viewable.get_layer_b(self.session_graph.sources)
-                if la and lb:
-                    ca = self.cache.get_source_cached_frames(la.id)
-                    cb = self.cache.get_source_cached_frames(lb.id)
-                    cached = ca.intersection(cb)
-                    cda = self.cache.get_source_disk_cached_frames(la.id)
-                    cdb = self.cache.get_source_disk_cached_frames(lb.id)
-                    disk_cached = cda.intersection(cdb)
-                elif la:
-                    cached = self.cache.get_source_cached_frames(la.id)
-                    disk_cached = self.cache.get_source_disk_cached_frames(la.id)
+            la = viewable.get_layer_a(self.session_graph.sources)
+            lb = viewable.get_layer_b(self.session_graph.sources)
+            if la and lb and la.id != lb.id:
+                ca = self.cache.get_source_cached_frames(la.id)
+                cb = self.cache.get_source_cached_frames(lb.id)
+                cached = ca.intersection(cb)
+                cda = self.cache.get_source_disk_cached_frames(la.id)
+                cdb = self.cache.get_source_disk_cached_frames(lb.id)
+                disk_cached = cda.intersection(cdb)
+            elif la:
+                cached = self.cache.get_source_cached_frames(la.id)
+                disk_cached = self.cache.get_source_disk_cached_frames(la.id)
+            elif lb:
+                cached = self.cache.get_source_cached_frames(lb.id)
+                disk_cached = self.cache.get_source_disk_cached_frames(lb.id)
             else:
                 cur = viewable.get_current_layer(self.session_graph.sources)
                 if cur:
@@ -2018,12 +2148,20 @@ class MainWindow(QMainWindow):
         else:
             if hasattr(self, "clock"):
                 self.cache.set_region_bounds(self.clock.in_frame, self.clock.out_frame)
-            if start_prefetch is not False:
+            if start_prefetch is not None:
+                self._cache_started = bool(start_prefetch)
+            else:
                 self._cache_started = True
-            if getattr(self, "_cache_started", False):
+
+            if self._cache_started:
                 if hasattr(self, "reader_engine") and self.reader_engine:
                     self.reader_engine.resume_prefetch()
                 self._trigger_prefetch()
+            else:
+                if hasattr(self, "reader_engine") and self.reader_engine:
+                    self.reader_engine.pause_prefetch()
+                if hasattr(self, "_delayed_cache_timer"):
+                    self._delayed_cache_timer.stop()
         self._on_cache_updated()
         mode_names = {
             CacheMode.OFF: "Off",
@@ -2085,9 +2223,25 @@ class MainWindow(QMainWindow):
             self._on_cache_updated()
             self.statusBar().showMessage("RAM Cache Cleared.", 3000)
 
+        # Evict dropped QC media cache and reset progress bars
+        if hasattr(self, "comp_qc_state") and self.comp_qc_state:
+            if self.comp_qc_state.source_item_id and hasattr(self, "cache"):
+                self.cache.clear_source(self.comp_qc_state.source_item_id)
+            self.comp_qc_state.source_prefetch_progress = 0.0
+            if self.comp_qc_state.matte_item_id and hasattr(self, "cache"):
+                self.cache.clear_source(self.comp_qc_state.matte_item_id)
+            self.comp_qc_state.matte_prefetch_progress = 0.0
+
     def _on_clear_all_cache(self) -> None:
         """Flush all cached RAM frames across all sources."""
         self.cache.clear()
+        if hasattr(self, "comp_qc_state") and self.comp_qc_state:
+            if self.comp_qc_state.source_item_id:
+                self.cache.clear_source(self.comp_qc_state.source_item_id)
+            self.comp_qc_state.source_prefetch_progress = 0.0
+            if self.comp_qc_state.matte_item_id:
+                self.cache.clear_source(self.comp_qc_state.matte_item_id)
+            self.comp_qc_state.matte_prefetch_progress = 0.0
         self._on_cache_updated()
         self.statusBar().showMessage("All RAM Cache Cleared.", 3000)
 
@@ -2229,49 +2383,99 @@ class MainWindow(QMainWindow):
 
     def _on_stack_cycle_forward(self) -> None:
         """Cycle to next layer in active StackView or next loaded source (Z)."""
-        viewable = self.session_graph.get_active_viewable()
-        if isinstance(viewable, StackView) and viewable.source_ids:
-            self.comparison_state.mode = ComparisonMode.OFF
-            self.viewport.comparison_state.mode = ComparisonMode.OFF
-            self.viewport.set_reference_frame(None)
-            idx = viewable.cycle_forward()
-            src = viewable.get_current_layer(self.session_graph.sources)
-            self.cache.set_active_source(src.id if src else None)
-            src_name = src.name if src else "Layer"
-            self.statusBar().showMessage(f"Stack Solo Layer {idx + 1}/{len(viewable.source_ids)}: {src_name}", 2500)
-            self._on_frame_changed(self.clock.current_frame)
-            self._on_cache_updated()
-            if hasattr(self, "sources_dock"):
-                self.sources_dock.panel.refresh_tree()
-        elif hasattr(self, "session_graph") and len(self.session_graph.sources) > 1:
-            sids = list(self.session_graph.sources.keys())
-            cur_id = viewable.id if (viewable and hasattr(viewable, "id")) else sids[0]
-            cur_idx = sids.index(cur_id) if cur_id in sids else 0
-            next_sid = sids[(cur_idx + 1) % len(sids)]
-            self.session_graph.set_active_view(ViewType.SOURCE, next_sid)
+        self._is_cycling_stack = True
+        try:
+            viewable = self.session_graph.get_active_viewable()
+            if isinstance(viewable, StackView) and viewable.source_ids:
+                viewable.compare_mode = "switch"
+                idx = viewable.cycle_forward()
+                comp_mode = ComparisonMode.OFF if (idx == viewable.index_b) else ComparisonMode.OVER
+                self.comparison_state.mode = comp_mode
+                self.viewport.comparison_state.mode = comp_mode
+                src = viewable.get_current_layer(self.session_graph.sources)
+                self.cache.set_active_source(src.id if src else None)
+                src_name = src.name if src else "Layer"
+                tag = "Layer A" if idx == viewable.index_a else ("Layer B" if idx == viewable.index_b else f"Layer {idx + 1}")
+                self.statusBar().showMessage(f"Stack Switch: {tag} ({src_name})", 2500)
+                self._on_frame_changed(self.clock.current_frame)
+                self._on_cache_updated()
+                if hasattr(self, "sources_dock"):
+                    self.sources_dock.panel.refresh_tree()
+                    self.sources_dock.panel._refresh_subpanels()
+            elif hasattr(self, "comp_qc_state") and self.comp_qc_state and self.comp_qc_state.source_plate_path and self.comp_qc_state.source_item_id:
+                qc_sid = self.comp_qc_state.source_item_id
+                cur_id = viewable.id if (viewable and hasattr(viewable, "id")) else None
+                if cur_id != qc_sid:
+                    self._pre_qc_source_id = cur_id
+                    self.session_graph.set_active_view(ViewType.SOURCE, qc_sid)
+                    self.statusBar().showMessage("QC Stack Switch: Source Plate", 2000)
+                else:
+                    target_sid = getattr(self, "_pre_qc_source_id", None)
+                    if not target_sid or target_sid not in self.session_graph.sources or target_sid == qc_sid:
+                        for sid in self.session_graph.sources.keys():
+                            if sid != qc_sid:
+                                target_sid = sid
+                                break
+                    if target_sid:
+                        self.session_graph.set_active_view(ViewType.SOURCE, target_sid)
+                        src_name = self.session_graph.sources[target_sid].name if target_sid in self.session_graph.sources else "Media"
+                        self.statusBar().showMessage(f"QC Stack Switch: {src_name}", 2000)
+            elif hasattr(self, "session_graph") and len(self.session_graph.sources) > 1:
+                sids = list(self.session_graph.sources.keys())
+                cur_id = viewable.id if (viewable and hasattr(viewable, "id")) else sids[0]
+                cur_idx = sids.index(cur_id) if cur_id in sids else 0
+                next_sid = sids[(cur_idx + 1) % len(sids)]
+                self.session_graph.set_active_view(ViewType.SOURCE, next_sid)
+        finally:
+            self._is_cycling_stack = False
 
     def _on_stack_cycle_backward(self) -> None:
         """Cycle to previous layer in active StackView or previous loaded source (Shift+Z)."""
-        viewable = self.session_graph.get_active_viewable()
-        if isinstance(viewable, StackView) and viewable.source_ids:
-            self.comparison_state.mode = ComparisonMode.OFF
-            self.viewport.comparison_state.mode = ComparisonMode.OFF
-            self.viewport.set_reference_frame(None)
-            idx = viewable.cycle_backward()
-            src = viewable.get_current_layer(self.session_graph.sources)
-            self.cache.set_active_source(src.id if src else None)
-            src_name = src.name if src else "Layer"
-            self.statusBar().showMessage(f"Stack Solo Layer {idx + 1}/{len(viewable.source_ids)}: {src_name}", 2500)
-            self._on_frame_changed(self.clock.current_frame)
-            self._on_cache_updated()
-            if hasattr(self, "sources_dock"):
-                self.sources_dock.panel.refresh_tree()
-        elif hasattr(self, "session_graph") and len(self.session_graph.sources) > 1:
-            sids = list(self.session_graph.sources.keys())
-            cur_id = viewable.id if (viewable and hasattr(viewable, "id")) else sids[0]
-            cur_idx = sids.index(cur_id) if cur_id in sids else 0
-            prev_sid = sids[(cur_idx - 1) % len(sids)]
-            self.session_graph.set_active_view(ViewType.SOURCE, prev_sid)
+        self._is_cycling_stack = True
+        try:
+            viewable = self.session_graph.get_active_viewable()
+            if isinstance(viewable, StackView) and viewable.source_ids:
+                viewable.compare_mode = "switch"
+                idx = viewable.cycle_backward()
+                comp_mode = ComparisonMode.OFF if (idx == viewable.index_b) else ComparisonMode.OVER
+                self.comparison_state.mode = comp_mode
+                self.viewport.comparison_state.mode = comp_mode
+                src = viewable.get_current_layer(self.session_graph.sources)
+                self.cache.set_active_source(src.id if src else None)
+                src_name = src.name if src else "Layer"
+                tag = "Layer A" if idx == viewable.index_a else ("Layer B" if idx == viewable.index_b else f"Layer {idx + 1}")
+                self.statusBar().showMessage(f"Stack Switch: {tag} ({src_name})", 2500)
+                self._on_frame_changed(self.clock.current_frame)
+                self._on_cache_updated()
+                if hasattr(self, "sources_dock"):
+                    self.sources_dock.panel.refresh_tree()
+                    self.sources_dock.panel._refresh_subpanels()
+            elif hasattr(self, "comp_qc_state") and self.comp_qc_state and self.comp_qc_state.source_plate_path and self.comp_qc_state.source_item_id:
+                qc_sid = self.comp_qc_state.source_item_id
+                cur_id = viewable.id if (viewable and hasattr(viewable, "id")) else None
+                if cur_id != qc_sid:
+                    self._pre_qc_source_id = cur_id
+                    self.session_graph.set_active_view(ViewType.SOURCE, qc_sid)
+                    self.statusBar().showMessage("QC Stack Switch: Source Plate", 2000)
+                else:
+                    target_sid = getattr(self, "_pre_qc_source_id", None)
+                    if not target_sid or target_sid not in self.session_graph.sources or target_sid == qc_sid:
+                        for sid in self.session_graph.sources.keys():
+                            if sid != qc_sid:
+                                target_sid = sid
+                                break
+                    if target_sid:
+                        self.session_graph.set_active_view(ViewType.SOURCE, target_sid)
+                        src_name = self.session_graph.sources[target_sid].name if target_sid in self.session_graph.sources else "Media"
+                        self.statusBar().showMessage(f"QC Stack Switch: {src_name}", 2000)
+            elif hasattr(self, "session_graph") and len(self.session_graph.sources) > 1:
+                sids = list(self.session_graph.sources.keys())
+                cur_id = viewable.id if (viewable and hasattr(viewable, "id")) else sids[0]
+                cur_idx = sids.index(cur_id) if cur_id in sids else 0
+                prev_sid = sids[(cur_idx - 1) % len(sids)]
+                self.session_graph.set_active_view(ViewType.SOURCE, prev_sid)
+        finally:
+            self._is_cycling_stack = False
 
     def _on_channel_changed(self, mode: int) -> None:
         self.viewport.channel_mode = mode
@@ -2456,6 +2660,21 @@ class MainWindow(QMainWindow):
 
     def _on_toggle_wipe(self) -> None:
         """Triggered by shortcut 'W'."""
+        viewable = self.session_graph.get_active_viewable() if hasattr(self, "session_graph") else None
+        if isinstance(viewable, StackView):
+            if viewable.compare_mode == "wipe":
+                prev = getattr(viewable, "_prev_compare_mode", "switch")
+                viewable.compare_mode = prev if prev != "wipe" else "switch"
+            else:
+                viewable._prev_compare_mode = viewable.compare_mode
+                viewable.compare_mode = "wipe"
+
+            if hasattr(self, "sources_dock"):
+                self.sources_dock.panel._refresh_subpanels()
+            self._on_sources_view_updated()
+            self.statusBar().showMessage(f"Stack Comparison Mode: {viewable.compare_mode.upper()}", 2500)
+            return
+
         self.wipe_widget.toggle_wipe()
 
     def _on_flip_wipe_orientation(self) -> None:
@@ -2616,6 +2835,378 @@ class MainWindow(QMainWindow):
             self.hud_audio.raise_()
         self.statusBar().showMessage(f"Audio Settings Panel: {'Shown' if vis else 'Hidden'}", 2000)
 
+    def _on_toggle_comp_qc(self) -> None:
+        """Toggle the xtra QC Utils right dock panel (Q)."""
+        if hasattr(self, "pkg_mgr") and self.pkg_mgr and not self.pkg_mgr.is_plugin_enabled("xtra-qc-Utils"):
+            return
+        target = getattr(self, "comp_qc_dock", None) or getattr(self, "hud_comp_qc", None)
+        if target is not None:
+            vis = target.isHidden()
+            target.setVisible(vis)
+            if vis:
+                if (hasattr(self, "file_browser_dock") and
+                    self.dockWidgetArea(self.file_browser_dock) == self.dockWidgetArea(target) and
+                    not self.file_browser_dock.isFloating() and not target.isFloating()):
+                    self.tabifyDockWidget(self.file_browser_dock, target)
+                target.raise_()
+                if hasattr(target, "set_latched"):
+                    target.set_latched(True)
+            self.statusBar().showMessage(f"xtra QC Utils: {'Shown' if vis else 'Hidden'}", 2000)
+
+    def _frame_to_thumbnail_pixmap(self, frame: np.ndarray) -> Optional[QPixmap]:
+        """Convert a decoded frame ndarray into an aspect-ratio fitted QPixmap thumbnail."""
+        if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+            return None
+        try:
+            from PySide6.QtGui import QImage, QPixmap
+            arr = frame
+            if arr.dtype != np.uint8:
+                arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
+            arr = np.ascontiguousarray(arr)
+            h, w = arr.shape[:2]
+            ch = arr.shape[2] if arr.ndim > 2 else 1
+            if ch == 4:
+                fmt = QImage.Format.Format_RGBA8888
+            elif ch == 3:
+                fmt = QImage.Format.Format_RGB888
+            else:
+                fmt = QImage.Format.Format_Grayscale8
+            qimg = QImage(arr.data, w, h, arr.strides[0], fmt).copy()
+            return QPixmap.fromImage(qimg)
+        except Exception as e:
+            logger.debug("Failed creating thumbnail pixmap: %s", e)
+            return None
+
+    def _resolve_qc_frame(self, reader, timeline_frame: int) -> int:
+        """Map active timeline frame into appropriate sequence frame for QC reader."""
+        if reader is None:
+            return timeline_frame
+        seq = getattr(reader, "seq", None)
+        if seq is not None and getattr(seq, "available_frames", None):
+            if timeline_frame in seq.available_frames:
+                return timeline_frame
+            clock_start = getattr(self.clock, "start_frame", 1) if hasattr(self, "clock") else 1
+            rel_offset = timeline_frame - clock_start
+            target_f = seq.start_frame + rel_offset
+            if target_f in seq.available_frames:
+                return target_f
+            return max(seq.start_frame, min(seq.end_frame, target_f))
+        return timeline_frame
+
+    def _on_comp_qc_source_dropped(self, file_path: str) -> None:
+        """Handle source reference plate dropped onto xtra QC Utils."""
+        try:
+            if file_path:
+                from openreview.core.sequence_parser import detect_image_sequence, DiskSequenceReader
+                seq = detect_image_sequence(file_path)
+                display_name = Path(file_path).name
+                if seq and len(seq.available_frames) > 1:
+                    reader = DiskSequenceReader(seq)
+                    hashes = "#" * seq.padding
+                    display_name = f"{seq.prefix}{seq.separator}{hashes}{seq.extension} [{seq.start_frame}-{seq.end_frame}]"
+                else:
+                    reader = ReaderEngine.create_reader(file_path)
+
+                if reader:
+                    self._reader_b = reader
+                    if hasattr(self, "comparison_state"):
+                        self.comparison_state.source_b_path = file_path
+                    if hasattr(self, "comp_qc_state"):
+                        self.comp_qc_state.source_plate_path = file_path
+
+                    # File into 'QC References' folder in Source Bin without switching active view
+                    if hasattr(self, "session_graph") and self.session_graph:
+                        prev_active_id = self.session_graph.active_view_id
+                        prev_view_type = self.session_graph.active_view_type or ViewType.SOURCE
+                        folder_id = None
+                        for fid, f in self.session_graph.folders.items():
+                            if f.name == "QC References":
+                                folder_id = fid
+                                break
+                        if not folder_id:
+                            f = self.session_graph.create_folder(name="QC References", folder_type="source")
+                            folder_id = f.id
+                        source_item = self.session_graph.add_source_from_path(file_path, parent_folder_id=folder_id)
+                        if prev_active_id is not None and self.session_graph.active_view_id != prev_active_id:
+                            self.session_graph.set_active_view(prev_view_type, prev_active_id)
+                        if source_item and hasattr(self, "comp_qc_state"):
+                            self.comp_qc_state.source_item_id = source_item.id
+                        if hasattr(self, "sources_dock") and self.sources_dock:
+                            self.sources_dock.panel.refresh_tree()
+
+                    cur_f = getattr(self.clock, "current_frame", 1) if hasattr(self, "clock") else 1
+                    mapped_f = self._resolve_qc_frame(reader, cur_f)
+                    b_frame = reader.read_frame(mapped_f)
+                    if b_frame is not None and hasattr(self, "viewport"):
+                        self.viewport.set_reference_frame(b_frame)
+
+                    # Update thumbnail in drop placeholder
+                    dock = getattr(self, "comp_qc_dock", None)
+                    panel = getattr(dock, "panel", dock) if dock else getattr(self, "hud_comp_qc", None)
+                    if panel:
+                        if hasattr(panel, "drop_source"):
+                            pix = self._frame_to_thumbnail_pixmap(b_frame)
+                            panel.drop_source.set_thumbnail(pix, display_name)
+                        if hasattr(panel, "sec_source_header") and hasattr(panel.sec_source_header, "btn_toggle"):
+                            panel.sec_source_header.btn_toggle.setText(f"Source Plate: {display_name}")
+
+                    self.statusBar().showMessage(f"xtra QC: Loaded reference plate: {display_name}", 3000)
+                else:
+                    self.statusBar().showMessage(f"xtra QC: Unable to decode plate: {Path(file_path).name}", 3000)
+        except Exception as e:
+            logger.warning("Failed loading source plate: %s", e)
+            self.statusBar().showMessage(f"xtra QC: Error loading source plate: {e}", 3000)
+
+    def _on_comp_qc_prefetch_source(self) -> None:
+        """Prefetch frames for the loaded source plate into RAM cache."""
+        plate_path = getattr(self.comp_qc_state, "source_plate_path", None)
+        if not plate_path or not self._reader_b:
+            self.statusBar().showMessage("xtra QC: No source plate loaded to prefetch.", 2500)
+            return
+
+        src_id = getattr(self.comp_qc_state, "source_item_id", None) or "qc_source_plate"
+        start_f = getattr(self.clock, "start_frame", 1) if hasattr(self, "clock") else 1
+        end_f = getattr(self.clock, "end_frame", 100) if hasattr(self, "clock") else 100
+        if hasattr(self._reader_b, "seq") and self._reader_b.seq:
+            start_f = self._reader_b.seq.start_frame
+            end_f = self._reader_b.seq.end_frame
+        elif hasattr(self, "session_graph") and self.session_graph and src_id in self.session_graph.sources:
+            s_item = self.session_graph.sources[src_id]
+            start_f = s_item.start_frame
+            end_f = s_item.end_frame
+
+        if hasattr(self, "comp_qc_state"):
+            self.comp_qc_state.source_prefetch_progress = 0.0
+
+        if hasattr(self, "reader_engine") and self.reader_engine:
+            self.reader_engine.queue_source_background_cache(
+                src_id,
+                self._reader_b,
+                start_f,
+                end_f,
+            )
+            self.statusBar().showMessage(f"xtra QC: Prefetching source plate ({start_f}-{end_f})...", 2500)
+        else:
+            if hasattr(self, "comp_qc_state"):
+                self.comp_qc_state.source_prefetch_progress = 1.0
+            self.statusBar().showMessage("xtra QC: Source plate cached 100%.", 2500)
+
+    def _on_comp_qc_unload_source(self) -> None:
+        """Unload reference plate."""
+        if hasattr(self, "comp_qc_state") and self.comp_qc_state:
+            src_id = self.comp_qc_state.source_item_id
+            if src_id and hasattr(self, "cache") and self.cache:
+                self.cache.clear_source(src_id)
+            self.comp_qc_state.source_plate_path = None
+            self.comp_qc_state.source_item_id = None
+            self.comp_qc_state.source_prefetch_progress = 0.0
+        self._reader_b = None
+        if hasattr(self, "comparison_state"):
+            self.comparison_state.source_b_path = None
+        if hasattr(self, "viewport"):
+            self.viewport.set_reference_frame(None)
+        dock = getattr(self, "comp_qc_dock", None)
+        panel = getattr(dock, "panel", dock) if dock else getattr(self, "hud_comp_qc", None)
+        if panel and hasattr(panel, "drop_source"):
+            panel.drop_source.reset_text()
+        self.statusBar().showMessage("xtra QC: Source plate unloaded.", 2000)
+
+    def _on_comp_qc_state_changed(self) -> None:
+        """Handle comp QC state updates, recompiling expressions and syncing matte frames."""
+        qc = getattr(self, "comp_qc_state", None)
+        if qc is not None and hasattr(self.viewport, "update_matte_expressions"):
+            self.viewport.update_matte_expressions(
+                getattr(qc, "expr_red", "r"),
+                getattr(qc, "expr_green", "g"),
+                getattr(qc, "expr_blue", "b"),
+                getattr(qc, "expr_alpha", "a"),
+            )
+        self._sync_matte_frame()
+        self.viewport.update()
+
+    def _sync_matte_frame(self, frame: Optional[int] = None, sync_read_allowed: bool = True) -> None:
+        """Fetch and upload the matte frame for the given frame (or clock frame) to the viewport."""
+        qc = getattr(self, "comp_qc_state", None)
+        is_matte_needed = qc is not None and (
+            getattr(qc, "overlay_matte_enabled", False)
+            or getattr(qc, "alpha_overlay_enabled", False)
+            or getattr(qc, "greycheck_enabled", False)
+            or getattr(qc, "checkerboard_enabled", False)
+        )
+        if frame is None:
+            frame = getattr(self.clock, "current_frame", 1) if hasattr(self, "clock") else 1
+
+        if is_matte_needed and hasattr(self, "_reader_matte") and self._reader_matte is not None:
+            mapped_f = self._resolve_qc_frame(self._reader_matte, frame)
+            m_sid = getattr(qc, "matte_item_id", None)
+            m_frame = None
+            if m_sid:
+                m_frame = self.cache.get_source_frame(m_sid, mapped_f)
+            if m_frame is None and sync_read_allowed:
+                m_frame = self._reader_matte.read_frame(mapped_f)
+                if m_sid and self.cache.mode != CacheMode.OFF and m_frame is not None:
+                    self.cache.put_source_frame(m_sid, mapped_f, m_frame)
+            if hasattr(self.viewport, "set_matte_frame"):
+                self.viewport.set_matte_frame(m_frame)
+        elif hasattr(self.viewport, "set_matte_frame") and getattr(self.viewport, "_image_matte", None) is not None:
+            self.viewport.set_matte_frame(None)
+
+    def _on_comp_qc_matte_dropped(self, file_path: str) -> None:
+        """Handle RGBA matte dropped onto xtra QC Utils."""
+        try:
+            if file_path:
+                from openreview.core.sequence_parser import detect_image_sequence, DiskSequenceReader
+                seq = detect_image_sequence(file_path)
+                display_name = Path(file_path).name
+                if seq and len(seq.available_frames) > 1:
+                    reader = DiskSequenceReader(seq)
+                    hashes = "#" * seq.padding
+                    display_name = f"{seq.prefix}{seq.separator}{hashes}{seq.extension} [{seq.start_frame}-{seq.end_frame}]"
+                else:
+                    reader = ReaderEngine.create_reader(file_path)
+
+                if reader:
+                    self._reader_matte = reader
+                    if hasattr(self, "comp_qc_state"):
+                        self.comp_qc_state.matte_path = file_path
+
+                    # File into 'QC References' folder in Source Bin without switching active view
+                    if hasattr(self, "session_graph") and self.session_graph:
+                        prev_active_id = self.session_graph.active_view_id
+                        prev_view_type = self.session_graph.active_view_type or ViewType.SOURCE
+                        folder_id = None
+                        for fid, f in self.session_graph.folders.items():
+                            if f.name == "QC References":
+                                folder_id = fid
+                                break
+                        if not folder_id:
+                            f = self.session_graph.create_folder(name="QC References", folder_type="source")
+                            folder_id = f.id
+                        matte_item = self.session_graph.add_source_from_path(file_path, parent_folder_id=folder_id)
+                        if prev_active_id is not None and self.session_graph.active_view_id != prev_active_id:
+                            self.session_graph.set_active_view(prev_view_type, prev_active_id)
+                        if matte_item and hasattr(self, "comp_qc_state"):
+                            self.comp_qc_state.matte_item_id = matte_item.id
+                        if hasattr(self, "sources_dock") and self.sources_dock:
+                            self.sources_dock.panel.refresh_tree()
+
+                    cur_f = getattr(self.clock, "current_frame", 1) if hasattr(self, "clock") else 1
+                    mapped_f = self._resolve_qc_frame(reader, cur_f)
+                    m_frame = reader.read_frame(mapped_f)
+                    if m_frame is not None and hasattr(self.viewport, "set_matte_frame"):
+                        self.viewport.set_matte_frame(m_frame)
+
+                    # Update thumbnail in drop placeholder
+                    dock = getattr(self, "comp_qc_dock", None)
+                    panel = getattr(dock, "panel", dock) if dock else getattr(self, "hud_comp_qc", None)
+                    if panel:
+                        if hasattr(panel, "drop_matte"):
+                            pix = self._frame_to_thumbnail_pixmap(m_frame)
+                            panel.drop_matte.set_thumbnail(pix, display_name)
+                        if hasattr(panel, "sec_matte_header") and hasattr(panel.sec_matte_header, "btn_toggle"):
+                            panel.sec_matte_header.btn_toggle.setText(f"RGBA Matte: {display_name}")
+
+                    self.statusBar().showMessage(f"xtra QC: Loaded RGBA matte: {display_name}", 3000)
+                else:
+                    self.statusBar().showMessage(f"xtra QC: Unable to decode matte: {Path(file_path).name}", 3000)
+        except Exception as e:
+            logger.warning("Failed loading matte: %s", e)
+            self.statusBar().showMessage(f"xtra QC: Error loading matte: {e}", 3000)
+
+    def _on_comp_qc_prefetch_matte(self) -> None:
+        """Prefetch frames for the loaded RGBA matte into RAM cache."""
+        matte_path = getattr(self.comp_qc_state, "matte_path", None)
+        if not matte_path or not self._reader_matte:
+            self.statusBar().showMessage("xtra QC: No matte loaded to prefetch.", 2500)
+            return
+
+        src_id = getattr(self.comp_qc_state, "matte_item_id", None) or "qc_matte"
+        start_f = getattr(self.clock, "start_frame", 1) if hasattr(self, "clock") else 1
+        end_f = getattr(self.clock, "end_frame", 100) if hasattr(self, "clock") else 100
+        if hasattr(self._reader_matte, "seq") and self._reader_matte.seq:
+            start_f = self._reader_matte.seq.start_frame
+            end_f = self._reader_matte.seq.end_frame
+        elif hasattr(self, "session_graph") and self.session_graph and src_id in self.session_graph.sources:
+            s_item = self.session_graph.sources[src_id]
+            start_f = s_item.start_frame
+            end_f = s_item.end_frame
+
+        if hasattr(self, "comp_qc_state"):
+            self.comp_qc_state.matte_prefetch_progress = 0.0
+
+        if hasattr(self, "reader_engine") and self.reader_engine:
+            self.reader_engine.queue_source_background_cache(
+                src_id,
+                self._reader_matte,
+                start_f,
+                end_f,
+            )
+            self.statusBar().showMessage(f"xtra QC: Prefetching matte ({start_f}-{end_f})...", 2500)
+        else:
+            if hasattr(self, "comp_qc_state"):
+                self.comp_qc_state.matte_prefetch_progress = 1.0
+            self.statusBar().showMessage("xtra QC: Matte cached 100%.", 2500)
+
+    def _on_comp_qc_unload_matte(self) -> None:
+        """Unload RGBA matte."""
+        if hasattr(self, "comp_qc_state") and self.comp_qc_state:
+            matte_id = self.comp_qc_state.matte_item_id
+            if matte_id and hasattr(self, "cache") and self.cache:
+                self.cache.clear_source(matte_id)
+            self.comp_qc_state.matte_path = None
+            self.comp_qc_state.matte_item_id = None
+            self.comp_qc_state.matte_prefetch_progress = 0.0
+        self._reader_matte = None
+        if hasattr(self, "viewport") and hasattr(self.viewport, "set_matte_frame"):
+            self.viewport.set_matte_frame(None)
+        dock = getattr(self, "comp_qc_dock", None)
+        panel = getattr(dock, "panel", dock) if dock else getattr(self, "hud_comp_qc", None)
+        if panel and hasattr(panel, "drop_matte"):
+            panel.drop_matte.reset_text()
+        self.statusBar().showMessage("xtra QC: Matte unloaded.", 2000)
+
+    def _on_comp_qc_splines_loaded(self, shapes: list) -> None:
+        """Handle spline vector curves loaded for overlay."""
+        if hasattr(self, "viewport"):
+            self.viewport.comp_qc_splines = shapes
+            self.viewport.update()
+
+    def _on_comp_qc_splines_cleared(self) -> None:
+        """Clear spline vector curves overlay."""
+        if hasattr(self, "viewport"):
+            self.viewport.comp_qc_splines = []
+            self.viewport.update()
+
+    def _on_comp_qc_scan_missing_frames(self) -> None:
+        """Scan disk for missing frames of the current active sequence."""
+        target_path = None
+        source = getattr(self, "active_source", None)
+        if source and hasattr(source, "path"):
+            target_path = str(source.path)
+        if not target_path and hasattr(self, "session"):
+            active = getattr(self.session, "active_source", None)
+            if active and hasattr(active, "path"):
+                target_path = str(active.path)
+
+        dock = getattr(self, "comp_qc_dock", None)
+        panel = getattr(dock, "panel", dock) if dock else getattr(self, "hud_comp_qc", None)
+        if not target_path:
+            if panel and hasattr(panel, "set_missing_frames_result"):
+                panel.set_missing_frames_result([], 0)
+                if hasattr(panel, "lbl_missing_result"):
+                    panel.lbl_missing_result.setText("No active media sequence loaded to scan.")
+            return
+
+        from openreview.core.sequence_parser import detect_image_sequence
+        seq_info = detect_image_sequence(target_path)
+        if seq_info and panel and hasattr(panel, "set_missing_frames_result"):
+            missing = sorted(list(seq_info.missing_frames))
+            total = (seq_info.end_frame - seq_info.start_frame + 1)
+            panel.set_missing_frames_result(missing, total)
+        elif panel and hasattr(panel, "lbl_missing_result"):
+            panel.lbl_missing_result.setText("Target media is a single file / video container (no missing frames).")
+            panel.lbl_missing_result.setStyleSheet("color: #50E070; font-size: 11px;")
+
     def _on_load_external_audio(self) -> None:
         """Open file dialog to attach external audio file."""
         path, _ = QFileDialog.getOpenFileName(
@@ -2739,8 +3330,8 @@ class MainWindow(QMainWindow):
             self.annotation_store.clear_all()
         if hasattr(self, "clock") and self.clock:
             self.clock.clear_all_bookmarks()
-            self.clock.set_range(1, 100, reset_in_out=True)
-            self.clock.set_frame(1)
+            self.clock.set_range(1001, 1200, reset_in_out=True)
+            self.clock.set_frame(1001)
 
         # 6. Reset Top Bar Controls
         if hasattr(self, "top_bar") and self.top_bar:
@@ -2790,8 +3381,18 @@ class MainWindow(QMainWindow):
             self.layers_widget.refresh_list(["beauty"])
         self._update_layered_input_menu_visibility()
         self._update_resolution_status("No Media")
+
+        # Clear xtra QC Utils loaded plates and reactive state
+        self._on_comp_qc_unload_source()
+        self._on_comp_qc_unload_matte()
+        if hasattr(self, "comp_qc_state") and self.comp_qc_state:
+            self.comp_qc_state.reset_defaults()
+
         self.setWindowTitle("OpenReview - Professional VFX Review & Playback")
         self.statusBar().showMessage("Session cleared - canvas and media reset", 3000)
+        self._active_view_is_sequence = False
+        self._pre_sequence_cache_mode = None
+        self._pre_sequence_cache_started = None
         self._suppress_in_out_record = False
 
     def _on_close_session(self, prompt: bool = True) -> None:
@@ -3022,7 +3623,8 @@ class MainWindow(QMainWindow):
         self.session_graph.add_sources_batch([item])
         if hasattr(self, "sources_dock"):
             self.sources_dock.panel.refresh_tree()
-        self._queue_source_for_background_caching(item)
+        # Inactive sources are not automatically cached; background caching remains dedicated
+        # exclusively to the active viewport input.
 
     def _queue_source_for_background_caching(self, item: SourceItem) -> None:
         if not hasattr(self, "reader_engine") or not self.reader_engine:
@@ -3053,6 +3655,13 @@ class MainWindow(QMainWindow):
             )
 
     def _on_background_caching_progress(self, source_id: str, cached: int, total: int) -> None:
+        if hasattr(self, "comp_qc_state") and self.comp_qc_state:
+            ratio = float(cached) / max(1, total)
+            if source_id == getattr(self.comp_qc_state, "source_item_id", None):
+                self.comp_qc_state.source_prefetch_progress = ratio
+            elif source_id == getattr(self.comp_qc_state, "matte_item_id", None):
+                self.comp_qc_state.matte_prefetch_progress = ratio
+
         src_name = ""
         if hasattr(self, "session_graph") and source_id in self.session_graph.sources:
             src_name = self.session_graph.sources[source_id].name
@@ -3445,6 +4054,9 @@ class MainWindow(QMainWindow):
             self._pre_presentation_file_browser_dock = (
                 hasattr(self, "file_browser_dock") and not self.file_browser_dock.isHidden()
             )
+            self._pre_presentation_comp_qc_dock = (
+                hasattr(self, "comp_qc_dock") and not self.comp_qc_dock.isHidden()
+            )
             self.menuBar().setVisible(False)
             self.top_bar.setVisible(False)
             self.markup_palette.setVisible(False)
@@ -3452,6 +4064,8 @@ class MainWindow(QMainWindow):
                 self.sources_dock.setVisible(False)
             if hasattr(self, "file_browser_dock"):
                 self.file_browser_dock.setVisible(False)
+            if hasattr(self, "comp_qc_dock"):
+                self.comp_qc_dock.setVisible(False)
             if hasattr(self, "top_toolbar"):
                 self.top_toolbar.setVisible(False)
             if hasattr(self, "markup_toolbar"):
@@ -3480,6 +4094,8 @@ class MainWindow(QMainWindow):
                 self.sources_dock.setVisible(True)
             if getattr(self, "_pre_presentation_file_browser_dock", False) and hasattr(self, "file_browser_dock"):
                 self.file_browser_dock.setVisible(True)
+            if getattr(self, "_pre_presentation_comp_qc_dock", False) and hasattr(self, "comp_qc_dock"):
+                self.comp_qc_dock.setVisible(True)
             if hasattr(self, "top_toolbar"):
                 self.top_toolbar.setVisible(True)
             if hasattr(self, "markup_toolbar"):
@@ -4051,7 +4667,7 @@ class MainWindow(QMainWindow):
         return self.hud_source_details if not self.hud_source_details.isHidden() else None
 
     def _get_all_hud_cards(self) -> list[FloatingHUDCard]:
-        return [
+        cards = [
             self.hud_hist,
             self.hud_wipe,
             self.hud_inspector,
@@ -4064,6 +4680,9 @@ class MainWindow(QMainWindow):
             self.hud_stereo,
             self.hud_ocio,
         ]
+        if hasattr(self, "hud_comp_qc") and isinstance(self.hud_comp_qc, FloatingHUDCard):
+            cards.append(self.hud_comp_qc)
+        return cards
 
     def _on_dock_all_panels_right(self) -> None:
         """Photoshop-style dock: stack visible panels along the right edge of the viewport."""
@@ -4112,8 +4731,57 @@ class MainWindow(QMainWindow):
             vis = self.file_browser_dock.isHidden()
             self.file_browser_dock.setVisible(vis)
             if vis:
+                if (hasattr(self, "comp_qc_dock") and
+                    self.dockWidgetArea(self.comp_qc_dock) == self.dockWidgetArea(self.file_browser_dock) and
+                    not self.file_browser_dock.isFloating() and not self.comp_qc_dock.isFloating()):
+                    self.tabifyDockWidget(self.comp_qc_dock, self.file_browser_dock)
                 self.file_browser_dock.raise_()
             self.statusBar().showMessage(f"File Browser: {'Shown' if vis else 'Hidden'}", 2000)
+
+    def cycle_dock_tab(self, current_dock: QDockWidget, forward: bool = True) -> Optional[QDockWidget]:
+        """Cycle to next or previous tab among docked widgets in the same dock area."""
+        if not isinstance(current_dock, QDockWidget):
+            return None
+        area = self.dockWidgetArea(current_dock)
+        candidates = [
+            d for d in [
+                getattr(self, "sources_dock", None),
+                getattr(self, "file_browser_dock", None),
+                getattr(self, "comp_qc_dock", None),
+            ]
+            if d is not None and self.dockWidgetArea(d) == area and not d.isFloating()
+        ]
+        try:
+            for d in self.tabifiedDockWidgets(current_dock):
+                if d not in candidates and isinstance(d, QDockWidget):
+                    candidates.append(d)
+        except Exception:
+            pass
+
+        # Exclude comp_qc_dock if plugin disabled
+        if hasattr(self, "pkg_mgr") and self.pkg_mgr and not self.pkg_mgr.is_plugin_enabled("xtra-qc-Utils"):
+            comp_qc = getattr(self, "comp_qc_dock", None)
+            if comp_qc in candidates and comp_qc.isHidden():
+                candidates.remove(comp_qc)
+
+        visible_docks = [d for d in candidates if not d.isHidden()]
+        cycle_list = visible_docks if len(visible_docks) > 1 else candidates
+
+        if len(cycle_list) <= 1:
+            return None
+
+        try:
+            curr_idx = cycle_list.index(current_dock)
+        except ValueError:
+            curr_idx = 0
+
+        step = 1 if forward else -1
+        target_dock = cycle_list[(curr_idx + step) % len(cycle_list)]
+        if target_dock.isHidden():
+            target_dock.show()
+        target_dock.raise_()
+        target_dock.setFocus()
+        return target_dock
 
     def _on_toggle_console_window(self) -> None:
         """Toggle non-modal Console & Error Log window (Ctrl+Shift+L)."""
@@ -4243,9 +4911,17 @@ class MainWindow(QMainWindow):
         if self.clock.is_playing:
             self.clock.pause()
 
+        prev_f = self.clock.current_frame
+        prev_start = self.clock.start_frame
+        prev_end = self.clock.end_frame
+        prev_offset = prev_f - prev_start
+
         self._suppress_in_out_record = True
         start_f = 1
         end_f = 100
+
+        prev_vid = getattr(self, "_current_active_view_id", None)
+        self._current_active_view_id = view_id
 
         if isinstance(viewable, SourceItem):
             self.cache.set_active_source(viewable.id)
@@ -4254,8 +4930,13 @@ class MainWindow(QMainWindow):
             self.reader = self._get_reader_for_source(viewable)
             self.reader_engine.set_reader(self.reader)
             self.clock.set_fps(viewable.fps)
-            start_f = viewable.start_frame
-            end_f = viewable.end_frame
+            is_cycling = getattr(self, "_is_cycling_stack", False)
+            if is_cycling and viewable.media_type == "still" and prev_start < prev_end:
+                start_f = prev_start
+                end_f = prev_end
+            else:
+                start_f = viewable.start_frame
+                end_f = viewable.end_frame
 
             if viewable.media_type == "video" and viewable.path and os.path.exists(viewable.path):
                 self.audio_engine.load_audio(viewable.path)
@@ -4293,25 +4974,36 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Active View: Sequence '{viewable.name}' ({len(viewable.clips)} clips)", 3000)
 
         elif isinstance(viewable, StackView):
-            mode_map = {
-                "wipe": ComparisonMode.WIPE,
-                "switch": ComparisonMode.OFF,
-                "split": ComparisonMode.SPLIT,
-                "difference": ComparisonMode.DIFFERENCE,
-                "difference_inverted": ComparisonMode.DIFFERENCE_INVERTED,
-                "over": ComparisonMode.OVER,
-                "add": ComparisonMode.ADD,
-            }
-            comp_mode = mode_map.get(viewable.compare_mode, ComparisonMode.OVER)
+            if viewable.compare_mode == "switch":
+                comp_mode = ComparisonMode.OFF if (viewable.current_layer_index == viewable.index_b) else ComparisonMode.OVER
+            else:
+                mode_map = {
+                    "wipe": ComparisonMode.WIPE,
+                    "switch": ComparisonMode.OVER,
+                    "split": ComparisonMode.SPLIT,
+                    "difference": ComparisonMode.DIFFERENCE,
+                    "difference_inverted": ComparisonMode.DIFFERENCE_INVERTED,
+                    "over": ComparisonMode.OVER,
+                    "add": ComparisonMode.ADD,
+                }
+                comp_mode = mode_map.get(viewable.compare_mode, ComparisonMode.OVER)
             self.comparison_state.mode = comp_mode
             self.viewport.comparison_state.mode = comp_mode
             self.viewport.comparison_state.wipe_position = viewable.wipe_position
             self.viewport.comparison_state.wipe_angle_deg = viewable.wipe_angle_deg
             self.viewport.comparison_state.diff_boost = viewable.diff_boost
             self.viewport.comparison_state.stack_mix = getattr(viewable, "stack_mix", 1.0)
-            self.viewport.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
             self.comparison_state.stack_mix = getattr(viewable, "stack_mix", 1.0)
-            self.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
+            wc = getattr(viewable, "wipe_center", (0.5, 0.5))
+            self.viewport.comparison_state.wipe_center = wc
+            self.comparison_state.wipe_center = wc
+
+            if viewable.compare_mode == "switch" and viewable.current_layer_index == viewable.index_b:
+                self.viewport.comparison_state.channels_a = (True, True, True, True)
+                self.comparison_state.channels_a = (True, True, True, True)
+            else:
+                self.viewport.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
+                self.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
 
             cur = viewable.get_current_layer(self.session_graph.sources)
             self.cache.set_active_source(cur.id if cur else None)
@@ -4401,18 +5093,45 @@ class MainWindow(QMainWindow):
         else:
             self.clock.set_range(start_f, end_f, reset_in_out=True)
 
-        self.clock.set_frame(start_f)
+        is_cycling = getattr(self, "_is_cycling_stack", False)
+        if is_cycling:
+            if start_f <= prev_f <= end_f:
+                target_f = prev_f
+            else:
+                target_f = max(start_f, min(end_f, start_f + prev_offset))
+        else:
+            target_f = start_f
+        self.clock.set_frame(target_f)
+        self._on_frame_changed(self.clock.current_frame)
         self.cache.set_region_bounds(start_f, end_f)
         self._suppress_in_out_record = False
 
-        if self.cache.mode != CacheMode.OFF:
-            self.reader_engine.request_prefetch(
-                self.clock.start_frame,
-                self.clock.end_frame,
-                in_frame=self.clock.in_frame,
-                out_frame=self.clock.out_frame,
-                current_frame=self.clock.current_frame,
-            )
+        # Cancel any pending prefetch tasks from the previous view and clear background queue
+        if hasattr(self, "reader_engine") and self.reader_engine:
+            self.reader_engine.cancel_pending()
+            self.reader_engine.clear_background_cache_queue()
+
+        is_seq = isinstance(viewable, SequenceView)
+        prev_is_seq = getattr(self, "_active_view_is_sequence", False)
+        self._active_view_is_sequence = is_seq
+
+        if is_seq and not prev_is_seq:
+            # Entering Sequence view: remember previous mode & active status
+            self._pre_sequence_cache_mode = self.cache.mode
+            self._pre_sequence_cache_started = getattr(self, "_cache_started", False)
+            # Switch to Full Sequence cache mode and immediately start prefetching
+            self._on_set_cache_mode(CacheMode.ALL, start_prefetch=True)
+        elif not is_seq and prev_is_seq:
+            # Exiting Sequence view: restore pre-sequence cache mode & status
+            prev_mode = getattr(self, "_pre_sequence_cache_mode", None)
+            prev_started = getattr(self, "_pre_sequence_cache_started", False)
+            if prev_mode is not None:
+                self._on_set_cache_mode(prev_mode, start_prefetch=prev_started)
+            self._pre_sequence_cache_mode = None
+            self._pre_sequence_cache_started = None
+        else:
+            if self.cache.mode != CacheMode.OFF and getattr(self, "_cache_started", False):
+                self._trigger_prefetch()
 
         self._on_frame_changed(self.clock.current_frame)
         self._on_cache_updated()
@@ -4426,19 +5145,34 @@ class MainWindow(QMainWindow):
                 self.viewport.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
                 self.comparison_state.stack_mix = getattr(viewable, "stack_mix", 1.0)
                 self.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
-                mode_map = {
-                    "wipe": ComparisonMode.WIPE,
-                    "switch": ComparisonMode.OFF,
-                    "split": ComparisonMode.SPLIT,
-                    "difference": ComparisonMode.DIFFERENCE,
-                    "difference_inverted": ComparisonMode.DIFFERENCE_INVERTED,
-                    "over": ComparisonMode.OVER,
-                    "add": ComparisonMode.ADD,
-                }
-                comp_mode = mode_map.get(viewable.compare_mode, ComparisonMode.OVER)
+                if hasattr(self, "sources_dock"):
+                    self.sources_dock.panel._refresh_subpanels()
+                if viewable.compare_mode == "switch":
+                    comp_mode = ComparisonMode.OFF if (viewable.current_layer_index == viewable.index_b) else ComparisonMode.OVER
+                else:
+                    mode_map = {
+                        "wipe": ComparisonMode.WIPE,
+                        "switch": ComparisonMode.OVER,
+                        "split": ComparisonMode.SPLIT,
+                        "difference": ComparisonMode.DIFFERENCE,
+                        "difference_inverted": ComparisonMode.DIFFERENCE_INVERTED,
+                        "over": ComparisonMode.OVER,
+                        "add": ComparisonMode.ADD,
+                    }
+                    comp_mode = mode_map.get(viewable.compare_mode, ComparisonMode.OVER)
                 self.comparison_state.mode = comp_mode
                 self.viewport.comparison_state.mode = comp_mode
+                self._on_frame_changed(self.clock.current_frame)
                 self.viewport.update()
+                self._on_cache_updated()
+                if self.cache.mode != CacheMode.OFF and getattr(self, "_cache_started", False):
+                    self._trigger_prefetch()
+                if hasattr(self, "wipe_widget"):
+                    self.wipe_widget.btn_wipe.setChecked(comp_mode == ComparisonMode.WIPE)
+                    self.wipe_widget.btn_split.setChecked(comp_mode == ComparisonMode.SPLIT)
+                    self.wipe_widget.btn_diff.setChecked(comp_mode == ComparisonMode.DIFFERENCE)
+                    self.wipe_widget.btn_off.setChecked(comp_mode in (ComparisonMode.OFF, ComparisonMode.OVER))
+                self.setWindowTitle(f"OpenReview - Stack: {viewable.name} [{viewable.compare_mode.upper()} mode]")
             else:
                 self._on_active_view_changed(self.session_graph.active_view_type.value, viewable.id)
 
@@ -4656,68 +5390,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("All color adjustments reset (Gain: 1.0, Gam: 1.0, Sat: 1.0).", 3000)
 
     def _show_about(self) -> None:
-        from openreview.resources import get_app_logo_path, get_app_icon
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QDialogButtonBox
-        from PySide6.QtGui import QPixmap
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("About OpenReview")
-        dlg.setWindowIcon(get_app_icon())
-        dlg.setFixedSize(460, 315)
-        dlg.setStyleSheet("QDialog { background-color: #1e1e1e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }")
-        layout = QVBoxLayout(dlg)
-        layout.setContentsMargins(24, 20, 24, 18)
-        layout.setSpacing(14)
-
-        logo_path = get_app_logo_path()
-        if logo_path.exists():
-            logo_lbl = QLabel(dlg)
-            pix = None
-            if logo_path.suffix.lower() == ".svg":
-                try:
-                    from PySide6.QtSvg import QSvgRenderer
-                    from PySide6.QtGui import QPainter
-                    from PySide6.QtCore import QRectF
-                    renderer = QSvgRenderer(str(logo_path))
-                    if renderer.isValid():
-                        dpr = dlg.devicePixelRatioF() if hasattr(dlg, "devicePixelRatioF") else 1.0
-                        target_w, target_h = 400, 64
-                        pix = QPixmap(int(target_w * dpr), int(target_h * dpr))
-                        pix.setDevicePixelRatio(dpr)
-                        pix.fill(Qt.GlobalColor.transparent)
-                        p = QPainter(pix)
-                        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-                        renderer.render(p, QRectF(0, 0, target_w, target_h))
-                        p.end()
-                except Exception:
-                    pix = None
-            if pix is None or pix.isNull():
-                pix = QPixmap(str(logo_path)).scaled(400, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            logo_lbl.setPixmap(pix)
-            logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(logo_lbl)
-
-        info_lbl = QLabel(dlg)
-        info_lbl.setWordWrap(True)
-        info_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        info_lbl.setStyleSheet("font-size: 12px; line-height: 1.4; color: #cccccc;")
-        info_lbl.setText(
-            "<span style='font-size: 15px; font-weight: bold; color: #e5a823;'>OpenReview</span> "
-            "<span style='color: #888888;'>v0.1.0</span><br>"
-            "<span style='color: #b0b0b0;'>Author: <strong style='color: #e0e0e0;'>Maruthu Chakravarthi</strong></span><br><br>"
-            "Professional VFX Image Review and Playback Application.<br>"
-            "Modern sequence playback, color grading, multi-view inspection, and annotation review.<br><br>"
-            "<span style='color: #999999;'>Color Science: OpenColorIO v2 & ACES 1.3 / 2.0<br>"
-            "Engine: PySide6 + OpenGL Core Profile</span>"
-        )
-        layout.addWidget(info_lbl)
-        layout.addStretch()
-
-        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, dlg)
-        btn_box.accepted.connect(dlg.accept)
-        btn_box.setCenterButtons(True)
-        layout.addWidget(btn_box)
+        from openreview.ui.about_dialog import AboutDialog
+        dlg = AboutDialog(self)
         dlg.exec()
+
 
     def _open_html_doc(self, filename: str) -> None:
         """Open specified HTML documentation manual in system default web browser."""

@@ -45,6 +45,7 @@ class PackageManager(QObject):
         self._manifests: Dict[str, PackageManifest] = {}
         self._loaded_plugins: Dict[str, OpenReviewPlugin] = {}
         self._disabled_packages: set[str] = set()
+        self._enabled_packages: set[str] = set()
 
         u_dir = user_dir if user_dir is not None else user_packages_dir
         self._user_packages_dir = Path(u_dir) if u_dir else (Path.home() / ".openreview" / "packages")
@@ -52,6 +53,31 @@ class PackageManager(QObject):
 
         self._builtin_packages_dir = Path(builtin_packages_dir) if builtin_packages_dir else (Path(__file__).parent / "builtin")
         self._builtin_packages_dir.mkdir(parents=True, exist_ok=True)
+
+        self._state_file = self._user_packages_dir.parent / "package_state.json"
+        self._load_state()
+
+    def _load_state(self) -> None:
+        try:
+            if hasattr(self, "_state_file") and self._state_file.is_file():
+                with open(self._state_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self._disabled_packages.update(data.get("disabled", []))
+                    self._enabled_packages.update(data.get("enabled", []))
+        except Exception as e:
+            logger.warning("Failed to load package state: %s", e)
+
+    def _save_state(self) -> None:
+        try:
+            if hasattr(self, "_state_file"):
+                self._state_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._state_file, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "disabled": sorted(list(self._disabled_packages)),
+                        "enabled": sorted(list(self._enabled_packages)),
+                    }, f, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save package state: %s", e)
 
     @classmethod
     def instance(cls, main_window: Optional[Any] = None) -> PackageManager:
@@ -137,9 +163,11 @@ class PackageManager(QObject):
                 if manifest_file:
                     try:
                         manifest = PackageManifest.from_file(manifest_file, is_builtin=is_builtin)
-                        # Check disabled state
-                        if manifest.name in self._disabled_packages:
+                        # Check override state
+                        if manifest.name in self._disabled_packages or manifest.id in self._disabled_packages:
                             manifest.enabled = False
+                        elif manifest.name in self._enabled_packages or manifest.id in self._enabled_packages:
+                            manifest.enabled = True
                         self._manifests[manifest.name] = manifest
                     except Exception as e:
                         logger.warning("Failed to parse manifest at %s: %s", manifest_file, e)
@@ -180,17 +208,30 @@ class PackageManager(QObject):
 
     def set_package_enabled(self, name: str, enabled: bool) -> bool:
         """Enable or disable an extension package."""
+        if not self._manifests:
+            self.discover_packages()
         manifest = self._manifests.get(name)
+        if not manifest:
+            for m in self._manifests.values():
+                if m.id == name or m.name == name:
+                    manifest = m
+                    break
         if not manifest:
             return False
 
         manifest.enabled = enabled
         if enabled:
             self._disabled_packages.discard(name)
+            self._disabled_packages.discard(manifest.id)
+            self._enabled_packages.add(name)
+            self._enabled_packages.add(manifest.id)
             if name not in self._loaded_plugins:
                 self._load_plugin(manifest)
         else:
+            self._enabled_packages.discard(name)
+            self._enabled_packages.discard(manifest.id)
             self._disabled_packages.add(name)
+            self._disabled_packages.add(manifest.id)
             if name in self._loaded_plugins:
                 plugin = self._loaded_plugins.pop(name)
                 # also pop alias if present
@@ -204,6 +245,7 @@ class PackageManager(QObject):
                 except Exception as e:
                     logger.error("Error shutting down plugin '%s': %s", name, e)
 
+        self._save_state()
         self.packages_changed.emit()
         return True
 
@@ -303,6 +345,13 @@ class PackageManager(QObject):
             shutil.rmtree(pkg_dir)
 
         del self._manifests[name]
+        self._disabled_packages.discard(name)
+        if manifest.id:
+            self._disabled_packages.discard(manifest.id)
+        self._enabled_packages.discard(name)
+        if manifest.id:
+            self._enabled_packages.discard(manifest.id)
+        self._save_state()
         self.packages_changed.emit()
         return True
 

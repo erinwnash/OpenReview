@@ -191,6 +191,7 @@ class ShortcutManager(QObject):
             ("hud.stereo", "Toggle Stereoscopic 3D HUD", "HUDs & Panels", "", "Show/hide stereo 3D display panel"),
             ("hud.toggle_file_browser", "Toggle File Browser", "HUDs & Panels", "Ctrl+B", "Show/hide dockable file and media browser"),
             ("hud.console", "Toggle Console Window", "HUDs & Panels", "Ctrl+Shift+L", "Show/hide diagnostic console and error log window"),
+            ("hud.comp_qc", "Toggle xtra QC Utils", "HUDs & Panels", "Q", "Show/hide dockable xtra QC Utils panel (Hold Q to peek)"),
 
             # Annotations
             ("annot.toggle_pen", "Toggle Pen Drawing Tool", "Annotations", "D", "Enable or disable freehand pencil draw"),

@@ -192,3 +192,51 @@ def test_layered_input_menu_dynamic_visibility(qtbot):
     window._on_close_session(prompt=False)
     assert not menu_action.isVisible()
 
+
+def test_freehand_pen_draft_to_smooth_antialiased_stroke(qtbot):
+    """Verify freehand pen renders draft line during drag and smooth antialiased Bezier curve on release."""
+    from PySide6.QtGui import QPainter, QImage, QPainterPath
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    vp = win.viewport
+
+    # Activate freehand PEN tool
+    vp._active_draw_tool = ShapeType.PEN
+    vp._active_draw_width = 3.0
+    vp._active_draw_color = (255, 100, 50, 255)
+
+    raw_points = [(0.1, 0.1), (0.2, 0.3), (0.4, 0.7), (0.6, 0.8), (0.9, 0.9)]
+    vp._current_stroke_points = list(raw_points)
+
+    # 1. During drawing drag (is_draft=True):
+    # Painter antialiasing hint must be disabled for draft rendering
+    img = QImage(300, 300, QImage.Format.Format_ARGB32)
+    p_draft = QPainter(img)
+    vp._render_stroke(p_draft, Stroke(ShapeType.PEN, points=raw_points), is_draft=True)
+    assert not bool(p_draft.renderHints() & QPainter.RenderHint.Antialiasing)
+    p_draft.end()
+
+    # 2. On mouse release (committed stroke):
+    # _build_smooth_bezier_path must produce cubic Bezier curves
+    screen_pts = [QPointF(p[0] * 300.0, p[1] * 300.0) for p in raw_points]
+    path = vp._build_smooth_bezier_path(screen_pts)
+    assert isinstance(path, QPainterPath)
+    assert path.elementCount() > len(raw_points)
+    # Check that cubicTo elements were generated (CurveToElement in QPainterPath.ElementType)
+    has_curves = any(path.elementAt(i).type == QPainterPath.ElementType.CurveToElement for i in range(path.elementCount()))
+    assert has_curves
+
+    # Committed stroke rendering has Antialiasing enabled
+    p_committed = QPainter(img)
+    vp._render_stroke(p_committed, Stroke(ShapeType.PEN, points=raw_points), is_draft=False)
+    assert bool(p_committed.renderHints() & QPainter.RenderHint.Antialiasing)
+    p_committed.end()
+
+    # Exporter also produces smooth cubic curves
+    exp_path = MediaExporter._build_smooth_bezier_path(screen_pts)
+    assert isinstance(exp_path, QPainterPath)
+    has_exp_curves = any(exp_path.elementAt(i).type == QPainterPath.ElementType.CurveToElement for i in range(exp_path.elementCount()))
+    assert has_exp_curves
+
+

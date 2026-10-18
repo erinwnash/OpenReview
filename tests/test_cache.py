@@ -89,3 +89,81 @@ def test_cache_region_mode():
     cache.put_frame(1005, arr)
     assert not cache.has_frame(1005)
 
+
+def test_cache_info_and_contiguous_ranges():
+    cache = RingBufferCache(max_memory_mb=64.0, mode=CacheMode.PLAY_AHEAD)
+    arr = np.zeros((10, 10, 4), dtype=np.float32)
+
+    # Insert frames 1001, 1002, 1003, and 1010, 1011
+    cache.put_frame(1001, arr)
+    cache.put_frame(1002, arr)
+    cache.put_frame(1003, arr)
+    cache.put_frame(1010, arr)
+    cache.put_frame(1011, arr)
+
+    ranges = cache.get_contiguous_cached_ranges()
+    assert ranges == [(1001, 1003), (1010, 1011)]
+
+    cap, used, lookahead_bytes, lookahead_sec, wait_sec, audio_sec, info_ranges = cache.cache_info()
+    assert cap > 0
+    assert used > 0
+    assert info_ranges == [(1001, 1003), (1010, 1011)]
+    assert wait_sec == 1.0
+
+
+def test_cache_audio_mode_and_scrubbing():
+    from openreview.core.cache import AudioCacheMode
+    cache = RingBufferCache(mode=CacheMode.PLAY_AHEAD)
+
+    assert cache.audio_cache_mode == AudioCacheMode.BUFFER
+    cache.set_audio_cached_seconds(2.5)
+    assert cache.audio_cached_seconds == 2.5
+
+    # During scrub, dynamic switch to GREEDY mode (Open RV rvui.mu)
+    cache.set_audio_scrubbing(True)
+    assert cache.audio_cache_mode == AudioCacheMode.GREEDY
+
+    # When scrub ends, restore BUFFER mode
+    cache.set_audio_scrubbing(False)
+    assert cache.audio_cache_mode == AudioCacheMode.BUFFER
+
+
+def test_cache_lookback_ratio_and_buffering_state():
+    cache = RingBufferCache(lookahead_frames=100, lookback_ratio=0.20, mode=CacheMode.PLAY_AHEAD)
+    assert cache.lookback_ratio == 0.20
+    assert cache._lookbehind == 20
+
+    cache.set_lookback_ratio(0.35)
+    assert cache.lookback_ratio == 0.35
+    assert cache._lookbehind == 35
+
+    buffering_signals = []
+    cache.buffering_state_changed.connect(lambda b: buffering_signals.append(b))
+
+    assert not cache.is_buffering
+    cache.set_buffering(True)
+    assert cache.is_buffering
+    assert buffering_signals == [True]
+
+    cache.set_buffering(False)
+    assert not cache.is_buffering
+    assert buffering_signals == [True, False]
+
+
+def test_cache_clear_all_but_frame():
+    cache = RingBufferCache(max_memory_mb=64.0, mode=CacheMode.PLAY_AHEAD)
+    arr = np.zeros((10, 10, 4), dtype=np.float32)
+
+    cache.put_frame(1001, arr)
+    cache.put_frame(1002, arr)
+    cache.put_frame(1003, arr)
+
+    assert cache.has_frame(1001)
+    assert cache.has_frame(1002)
+    assert cache.has_frame(1003)
+
+    cache.clear_all_but_frame(1002)
+    assert not cache.has_frame(1001)
+    assert cache.has_frame(1002)
+    assert not cache.has_frame(1003)
+

@@ -1,8 +1,9 @@
 # OpenReview Python SDK Reference
 
 **Author:** Maruthu Chakravarthi  
-**Version:** 1.0.0  
+**Version:** 1.0.1  
 **HTML Portal:** [docs/html/sdk.html](file:///e:/works/Pipeline/code/OpenReview/docs/html/sdk.html)
+
 
 The OpenReview Python SDK (`openreview.sdk`) enables seamless programmatic control of OpenReview from pipeline tools, terminal scripts, and Digital Content Creation (DCC) software such as **Foundry Nuke**, **Autodesk Maya**, and **SideFX Houdini**.
 

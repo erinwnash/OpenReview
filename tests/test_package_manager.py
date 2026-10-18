@@ -162,3 +162,70 @@ class ZipPlugin(OpenReviewPlugin):
     assert success is True
     assert not expected_dir.exists()
 
+
+def test_package_manager_dialog_immediate_toggle(tmp_path, qapp):
+    """Verify clicking Enable/Disable in PackageManagerDialog immediately updates button text, style, and table status without jumping selection."""
+    from openreview.ui.package_manager_dialog import PackageManagerDialog
+
+    user_packages_dir = tmp_path / "user_packages"
+    user_packages_dir.mkdir()
+
+    # Create dummy plugin folder
+    plugin_dir = user_packages_dir / "my_tool"
+    plugin_dir.mkdir()
+
+    manifest_json = plugin_dir / "manifest.json"
+    manifest_json.write_text(json.dumps({
+        "id": "my_tool",
+        "name": "My Tool",
+        "version": "1.0.0",
+        "enabled": False,
+        "entrypoint": "plugin.py",
+    }))
+
+    (plugin_dir / "plugin.py").write_text("""
+from openreview.packages.plugin_base import OpenReviewPlugin
+class MyToolPlugin(OpenReviewPlugin):
+    pass
+""")
+
+    mgr = PackageManager(user_dir=user_packages_dir)
+    dlg = PackageManagerDialog(pkg_mgr=mgr)
+
+    # Find row with My Tool
+    tool_row = -1
+    for r in range(dlg.table.rowCount()):
+        item = dlg.table.item(r, 0)
+        if item and item.text() == "My Tool":
+            tool_row = r
+            break
+    assert tool_row >= 0
+
+    # Select My Tool
+    dlg.table.selectRow(tool_row)
+    dlg._on_row_selected()
+
+    assert dlg.lbl_det_name.text() == "My Tool"
+    assert dlg.btn_toggle_enable.text() == "Enable Plugin"
+    assert dlg.table.item(tool_row, 2).text() == "Disabled"
+
+    # Click Enable Plugin button
+    dlg.btn_toggle_enable.click()
+
+    # Must immediately update:
+    assert dlg.btn_toggle_enable.text() == "Disable Plugin"
+    assert dlg.table.item(tool_row, 2).text() == "Enabled"
+    assert dlg.table.currentRow() == tool_row
+    assert mgr.is_plugin_enabled("My Tool") is True
+
+    # Click Disable Plugin button
+    dlg.btn_toggle_enable.click()
+
+    # Must immediately update back:
+    assert dlg.btn_toggle_enable.text() == "Enable Plugin"
+    assert dlg.table.item(tool_row, 2).text() == "Disabled"
+    assert dlg.table.currentRow() == tool_row
+    assert mgr.is_plugin_enabled("My Tool") is False
+
+    dlg.close()
+

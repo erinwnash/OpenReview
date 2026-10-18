@@ -10,6 +10,7 @@ import math
 import time
 from typing import Optional, Tuple
 import numpy as np
+
 from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, Signal, QTimer
 from PySide6.QtGui import (
     QPainter,
@@ -37,7 +38,7 @@ from PySide6.QtOpenGL import (
 
 from dataclasses import dataclass, field
 from enum import Enum
-from openreview.color.shader_builder import VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE
+from openreview.color.shader_builder import VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE, build_fragment_shader
 from openreview.color.lut_manager import CubeLut, AscCdl, ColorGradeSettings
 from openreview.models.annotations import AnnotationStore, ShapeType, Stroke
 from openreview.models.comparison import ComparisonState, ComparisonMode
@@ -202,6 +203,10 @@ class ViewportCanvas(QOpenGLWidget):
         self.matte_ratio: Optional[float] = None  # None = No matte, e.g. 1.33, 1.85, 2.35
         self.matte_opacity: float = 1.0
 
+        # Comp QC Toolset State & Spline Overlays
+        self.comp_qc_state: Optional[Any] = None
+        self.comp_qc_splines: list = []
+
         # Viewport Background
         self.background_mode: str = "black"  # "black", "grey18", "grey50", "white", "checker"
 
@@ -232,7 +237,10 @@ class ViewportCanvas(QOpenGLWidget):
         self.color_grading = ColorGradeSettings()
         self._pending_upload_a = False
         self._pending_upload_b = False
+        self._pending_upload_matte = False
         self._pending_upload_lut = False
+        self._image_matte: Optional[np.ndarray] = None
+        self._texture_matte: Optional[QOpenGLTexture] = None
 
         # Info Strip State
         self.show_info_strip: bool = False
@@ -375,6 +383,10 @@ class ViewportCanvas(QOpenGLWidget):
             self._upload_texture_b()
             self._pending_upload_b = False
 
+        if getattr(self, "_pending_upload_matte", False) and getattr(self, "_image_matte", None) is not None:
+            self._upload_texture_matte()
+            self._pending_upload_matte = False
+
         if self._pending_upload_lut:
             self._upload_lut_texture()
             self._pending_upload_lut = False
@@ -418,13 +430,30 @@ class ViewportCanvas(QOpenGLWidget):
             self._texture_a.bind(0)
             self._set_uniform("uTextureA", 0)
 
-            # Bind reference texture unit 1 if comparison active or stereo mode active
+            # Bind reference texture unit 1 if comparison active, stereo mode active, or QC plate compare
+            qc = getattr(self, "comp_qc_state", None)
             is_stereo_active = (self.stereo_mode != 0)
-            has_b = self._texture_b is not None and (self.comparison_state.mode != ComparisonMode.OFF or is_stereo_active)
+            is_qc_using_b = (qc is not None and (getattr(qc, "compare_against_plate", False) or getattr(qc, "qc_mode", 0) in (4, 7, 8)))
+            has_b = self._texture_b is not None and (self.comparison_state.mode != ComparisonMode.OFF or is_stereo_active or is_qc_using_b)
             if has_b and self._texture_b:
                 self._texture_b.bind(1)
                 self._set_uniform("uTextureB", 1)
             self._set_uniform("uHasTextureB", 1 if has_b else 0)
+
+            # Bind optional Matte texture unit 3
+            matte_tex = getattr(self, "_texture_matte", None)
+            has_matte = matte_tex is not None and (
+                qc is not None and (
+                    getattr(qc, "alpha_overlay_enabled", False)
+                    or getattr(qc, "overlay_matte_enabled", False)
+                    or getattr(qc, "greycheck_enabled", False)
+                    or getattr(qc, "checkerboard_enabled", False)
+                )
+            )
+            if has_matte and matte_tex:
+                matte_tex.bind(3)
+                self._set_uniform("uTextureMatte", 3)
+            self._set_uniform("uHasTextureMatte", 1 if has_matte else 0)
 
             # Pass Stereo 3D Uniform
             self._set_uniform("uStereoMode", int(self.stereo_mode))
@@ -451,6 +480,8 @@ class ViewportCanvas(QOpenGLWidget):
             # Pass Comparison Uniforms
             self._set_uniform("uComparisonMode", int(self.comparison_state.mode))
             self._set_uniform("uWipePos", float(self.comparison_state.wipe_position))
+            wc = getattr(self.comparison_state, "wipe_center", (0.5, 0.5))
+            self._shader_program.setUniformValue("uWipeCenter", float(wc[0]), float(wc[1]))
             angle_rad = math.radians(self.comparison_state.wipe_angle_deg)
             self._set_uniform("uWipeAngle", float(angle_rad))
             img_aspect = (float(self._img_width) * float(self.pixel_aspect_ratio)) / max(1.0, float(self._img_height))
@@ -488,6 +519,89 @@ class ViewportCanvas(QOpenGLWidget):
             self._set_uniform("uInvertColors", 1 if cg.invert_colors else 0)
             self._set_uniform("uShowOutOfRange", 1 if cg.show_out_of_range else 0)
 
+            # Pass Comp QC Toolset Uniforms
+            if qc is not None:
+                self._set_uniform("uQcMode", int(qc.qc_mode))
+                self._set_uniform("uQcClippingThreshold", float(qc.clipping_threshold))
+                self._set_uniform("uQcNegativeOverComp", 1 if qc.negative_over_comp else 0)
+                self._set_uniform("uQcSaturationBoost", float(qc.saturation_boost))
+                self._set_uniform("uQcHighpassRadius", float(getattr(qc, "blur_radius", qc.highpass_radius)))
+                self._set_uniform("uQcClampValues", 1 if qc.clamp_plate_values else 0)
+                self._set_uniform("uQcCheckClampedAlpha", 1 if getattr(qc, "clamp_alpha", qc.check_clamped_alpha) else 0)
+                self._set_uniform("uQcAlphaMaskEnabled", 1 if getattr(qc, "alpha_overlay_enabled", qc.alpha_mask_enabled) else 0)
+                c_mask = getattr(qc, "overlay_color", qc.alpha_mask_color)
+                self._shader_program.setUniformValue(
+                    "uQcAlphaMaskColor",
+                    float(c_mask.redF()),
+                    float(c_mask.greenF()),
+                    float(c_mask.blueF()),
+                    float(getattr(qc, "mix_overlay", qc.alpha_mask_opacity)),
+                )
+                self._set_uniform("uQcAlphaMaskInvert", 1 if qc.alpha_mask_invert else 0)
+                self._set_uniform("uQcFlopComp", 1 if qc.flop_comp else 0)
+                self._set_uniform("uQcHslMode", int(qc.hsl_mode))
+                self._set_uniform("uQcGrainCompareMode", int(qc.grain_compare_mode))
+                self._set_uniform("uQcGrainBoost", float(qc.grain_boost))
+                self._set_uniform("uQcGamma", float(getattr(qc, "qc_gamma", 1.0)))
+                self._set_uniform("uQcGain", float(getattr(qc, "qc_gain", 1.0)))
+                self._set_uniform("uQcSoftclip", float(getattr(qc, "qc_softclip", 0.0)))
+                self._set_uniform("uQcSatMultiplier", float(getattr(qc, "qc_sat_multiplier", 1.0)))
+                self._set_uniform("uQcHueRotation", float(getattr(qc, "qc_hue_rotation", 0.0)))
+                self._set_uniform("uQcEdgeThreshold", float(getattr(qc, "edge_threshold", 0.0)))
+                self._set_uniform("uQcCompareAgainstPlate", 1 if getattr(qc, "compare_against_plate", False) else 0)
+                self._set_uniform("uQcComparePlates", 1 if getattr(qc, "compare_plates", False) else 0)
+                self._set_uniform("uQcMixOverlay", float(getattr(qc, "mix_overlay", 1.0)))
+                self._set_uniform("uQcOverlayMatte", 1 if getattr(qc, "overlay_matte_enabled", False) else 0)
+                self._set_uniform("uQcMatteIsPremult", 1 if getattr(qc, "matte_is_premult", True) else 0)
+                self._set_uniform("uQcGreycheckEnabled", 1 if getattr(qc, "greycheck_enabled", False) else 0)
+                self._set_uniform("uQcCheckerboardEnabled", 1 if getattr(qc, "checkerboard_enabled", False) else 0)
+                self._set_uniform("uQcGreyValue", float(getattr(qc, "grey_value", 0.5)))
+                self._set_uniform("uQcGridScale", float(getattr(qc, "grid_scale", 32.0)))
+                self._set_uniform("uQcCheckerContrast", float(getattr(qc, "checker_contrast", 0.2)))
+                self._set_uniform("uQcHipassValue", float(getattr(qc, "hipass_value", getattr(qc, "blur_radius", 3.0))))
+                self._shader_program.setUniformValue(
+                    "uQcMatteChannels",
+                    1.0 if getattr(qc, "enable_red", True) else 0.0,
+                    1.0 if getattr(qc, "enable_green", True) else 0.0,
+                    1.0 if getattr(qc, "enable_blue", True) else 0.0,
+                    1.0 if getattr(qc, "enable_alpha", True) else 0.0,
+                )
+                cur_f = float(getattr(self.clock, "current_frame", 1)) if hasattr(self, "clock") and self.clock else 1.0
+                self._set_uniform("uCurrentFrame", cur_f)
+            else:
+                self._set_uniform("uQcMode", 0)
+                self._set_uniform("uQcClippingThreshold", 50.0)
+                self._set_uniform("uQcNegativeOverComp", 0)
+                self._set_uniform("uQcSaturationBoost", 4.0)
+                self._set_uniform("uQcHighpassRadius", 5.0)
+                self._set_uniform("uQcClampValues", 0)
+                self._set_uniform("uQcCheckClampedAlpha", 0)
+                self._set_uniform("uQcAlphaMaskEnabled", 0)
+                self._shader_program.setUniformValue("uQcAlphaMaskColor", 0.86, 0.14, 0.14, 0.5)
+                self._set_uniform("uQcAlphaMaskInvert", 0)
+                self._set_uniform("uQcFlopComp", 0)
+                self._set_uniform("uQcHslMode", 0)
+                self._set_uniform("uQcGrainCompareMode", 0)
+                self._set_uniform("uQcGrainBoost", 5.0)
+                self._set_uniform("uQcGamma", 1.0)
+                self._set_uniform("uQcGain", 1.0)
+                self._set_uniform("uQcSoftclip", 0.0)
+                self._set_uniform("uQcSatMultiplier", 1.0)
+                self._set_uniform("uQcHueRotation", 0.0)
+                self._set_uniform("uQcEdgeThreshold", 0.0)
+                self._set_uniform("uQcCompareAgainstPlate", 0)
+                self._set_uniform("uQcComparePlates", 0)
+                self._set_uniform("uQcMixOverlay", 1.0)
+                self._set_uniform("uQcOverlayMatte", 0)
+                self._set_uniform("uQcMatteIsPremult", 1)
+                self._set_uniform("uQcGreycheckEnabled", 0)
+                self._set_uniform("uQcCheckerboardEnabled", 0)
+                self._set_uniform("uQcGreyValue", 0.5)
+                self._set_uniform("uQcGridScale", 32.0)
+                self._set_uniform("uQcCheckerContrast", 0.2)
+                self._set_uniform("uQcHipassValue", 3.0)
+                self._shader_program.setUniformValue("uQcMatteChannels", 1.0, 1.0, 1.0, 1.0)
+
             # Pass 3D LUT Texture Binding & Uniform
             has_lut = (self._lut_texture is not None and self.color_grading.active_lut is not None and self.color_grading.lut_enabled)
             self._set_uniform("uHasLut3D", 1 if has_lut else 0)
@@ -499,8 +613,7 @@ class ViewportCanvas(QOpenGLWidget):
             viewport_w = max(1.0, float(self.width()))
             viewport_h = max(1.0, float(self.height()))
 
-            img_w = float(self._img_width) * float(self.pixel_aspect_ratio)
-            img_h = float(self._img_height)
+            img_w, img_h = self._effective_image_dimensions()
 
             is_rot_90 = (self.rotation % 180 != 0)
             disp_w = img_h if is_rot_90 else img_w
@@ -547,9 +660,12 @@ class ViewportCanvas(QOpenGLWidget):
                 self._paint_markup_overlay(painter)
                 self._paint_color_samplers_overlay(painter)
                 self._paint_matte_overlay(painter)
-                if self.comparison_state.mode in (ComparisonMode.WIPE, ComparisonMode.SPLIT):
+                self._paint_comp_qc_splines_overlay(painter)
+                if self.comparison_state.mode == ComparisonMode.WIPE:
                     self._paint_wipe_overlay(painter)
-                if self.show_safe_guides:
+                elif self.comparison_state.mode == ComparisonMode.SPLIT:
+                    self._paint_split_overlay(painter)
+                if self.show_safe_guides and self.comparison_state.mode != ComparisonMode.SPLIT:
                     self._paint_safe_guides(painter)
                 if self.show_info_strip:
                     self._paint_info_strip(painter)
@@ -636,10 +752,15 @@ class ViewportCanvas(QOpenGLWidget):
         dir_y = math.sin(angle_rad)
         r_max = 0.5 * (aspect * abs(dir_x) + abs(dir_y))
 
-        # Center point along divider line in normalized image coordinates (0.0 to 1.0)
-        dist = 2.0 * r_max * (pos - 0.5)
-        norm_hx = 0.5 + (dist * dir_x) / aspect
-        norm_hy = 0.5 + dist * dir_y
+        # Center point along divider line (pinned rotation pivot)
+        wc = getattr(self.comparison_state, "wipe_center", None)
+        if wc is not None:
+            norm_hx, norm_hy = wc
+        else:
+            dist = 2.0 * r_max * (pos - 0.5)
+            norm_hx = 0.5 + (dist * dir_x) / aspect
+            norm_hy = 0.5 + dist * dir_y
+            self.comparison_state.wipe_center = (norm_hx, norm_hy)
 
         # Tangent along divider line (perpendicular to normal in isotropic image coordinates)
         tang_nx = -dir_y / aspect
@@ -671,7 +792,7 @@ class ViewportCanvas(QOpenGLWidget):
         line_pt1 = QPointF(handle_screen.x() - tx * diag, handle_screen.y() - ty * diag)
         line_pt2 = QPointF(handle_screen.x() + tx * diag, handle_screen.y() + ty * diag)
 
-        rot_offset = 36.0
+        rot_offset = 26.0
         rot_screen = QPointF(handle_screen.x() + tx * rot_offset, handle_screen.y() + ty * rot_offset)
 
         return handle_screen, rot_screen, line_pt1, line_pt2, QPointF(nx, ny), QPointF(tx, ty)
@@ -680,6 +801,10 @@ class ViewportCanvas(QOpenGLWidget):
         """Render interactive split wipe divider line, center handle, and rotation knob."""
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Reduce opacity by 25% while actively dragging for unobstructed view
+        if self._is_wiping or self._is_rotating_wipe:
+            painter.setOpacity(0.75)
 
         (
             handle_screen,
@@ -699,14 +824,14 @@ class ViewportCanvas(QOpenGLWidget):
         tx, ty = tangent_dir.x(), tangent_dir.y()
         handle_rot_deg = math.degrees(math.atan2(ty, tx))
 
-        # 1. Draw glowing divider line
+        # 1. Draw glowing divider line (thinned by 50%)
         is_line_active = (self._wipe_hover_part in ("line", "handle", "rotate") or self._is_wiping or self._is_rotating_wipe)
-        pen_glow = QPen(QColor(0, 0, 0, 180), 5)
+        pen_glow = QPen(QColor(0, 0, 0, 180), 2.5)
         painter.setPen(pen_glow)
         painter.drawLine(line_pt1, line_pt2)
 
         pen_color = QColor(255, 215, 64, 255) if is_line_active else QColor(229, 168, 35, 220)
-        pen = QPen(pen_color, 2.5 if is_line_active else 2.0)
+        pen = QPen(pen_color, 1.25 if is_line_active else 1.0)
         painter.setPen(pen)
         painter.drawLine(line_pt1, line_pt2)
 
@@ -716,55 +841,142 @@ class ViewportCanvas(QOpenGLWidget):
         painter.rotate(handle_rot_deg)
 
         # Draw connecting stem to rotation knob
-        painter.setPen(QPen(QColor(229, 168, 35, 180), 1.5, Qt.PenStyle.DashLine))
-        painter.drawLine(QPointF(20, 0), QPointF(26, 0))
+        painter.setPen(QPen(QColor(229, 168, 35, 180), 1.0, Qt.PenStyle.DashLine))
+        painter.drawLine(QPointF(16, 0), QPointF(19, 0))
 
-        # Center Pill Handle (Width 40, Height 20)
+        # Center Pill Handle (Width 32, Height 10 - reduced thickness by 50%)
         is_handle_hot = (self._wipe_hover_part == "handle" or self._is_wiping)
         handle_bg = QColor(35, 30, 20, 245) if is_handle_hot else QColor(20, 20, 20, 235)
         handle_border = QColor(255, 215, 64) if is_handle_hot else QColor(229, 168, 35)
         painter.setBrush(handle_bg)
-        painter.setPen(QPen(handle_border, 1.8 if is_handle_hot else 1.5))
-        painter.drawRoundedRect(QRectF(-20, -10, 40, 20), 4, 4)
+        painter.setPen(QPen(handle_border, 1.2 if is_handle_hot else 1.0))
+        painter.drawRoundedRect(QRectF(-16, -5, 32, 10), 2.5, 2.5)
 
         # Handle center glyph
-        painter.setPen(QColor(255, 255, 255, 230))
-        glyph_font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+        painter.setPen(QColor(255, 255, 255, 220))
+        glyph_font = QFont("Segoe UI", 6, QFont.Weight.Bold)
         painter.setFont(glyph_font)
-        painter.drawText(QRectF(-20, -10, 40, 20), Qt.AlignmentFlag.AlignCenter, "◧")
+        painter.drawText(QRectF(-16, -5, 32, 10), Qt.AlignmentFlag.AlignCenter, "◧")
 
-        # Circular Rotation Knob (Center at 36, 0, Radius 10)
+        # Circular Rotation Knob (Center at 26, 0, Radius 7)
         is_rot_hot = (self._wipe_hover_part == "rotate" or self._is_rotating_wipe)
         rot_bg = QColor(50, 40, 15, 245) if is_rot_hot else QColor(25, 25, 25, 235)
         rot_border = QColor(255, 225, 80) if is_rot_hot else QColor(229, 168, 35)
         painter.setBrush(rot_bg)
-        painter.setPen(QPen(rot_border, 1.8 if is_rot_hot else 1.5))
-        painter.drawEllipse(QPointF(36, 0), 10, 10)
+        painter.setPen(QPen(rot_border, 1.2 if is_rot_hot else 1.0))
+        painter.drawEllipse(QPointF(26, 0), 7, 7)
 
         # Rotation glyph '↻'
         painter.setPen(QColor(255, 215, 64) if is_rot_hot else QColor(220, 220, 220))
-        rot_font = QFont("Segoe UI", 8, QFont.Weight.Bold)
+        rot_font = QFont("Segoe UI", 6, QFont.Weight.Bold)
         painter.setFont(rot_font)
-        painter.drawText(QRectF(26, -10, 20, 20), Qt.AlignmentFlag.AlignCenter, "↻")
+        painter.drawText(QRectF(19, -7, 14, 14), Qt.AlignmentFlag.AlignCenter, "↻")
 
         # Live Info Badge (when active)
         if self._is_wiping or self._is_rotating_wipe or self._wipe_hover_part:
             pos_pct = int(round(self.comparison_state.wipe_position * 100))
             angle_val = int(round(self.comparison_state.wipe_angle_deg)) % 360
             badge_text = f"{pos_pct}% | {angle_val}°"
-            badge_w = 68
-            badge_h = 18
-            badge_rect = QRectF(-badge_w / 2, -32, badge_w, badge_h)
+            badge_w = 64
+            badge_h = 16
+            badge_rect = QRectF(-badge_w / 2, -26, badge_w, badge_h)
             painter.setBrush(QColor(15, 15, 15, 230))
             painter.setPen(QPen(QColor(229, 168, 35), 1.0))
             painter.drawRoundedRect(badge_rect, 3, 3)
 
             painter.setPen(QColor(229, 168, 35))
-            badge_font = QFont("Segoe UI", 8, QFont.Weight.DemiBold)
+            badge_font = QFont("Segoe UI", 7, QFont.Weight.DemiBold)
             painter.setFont(badge_font)
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
 
         painter.restore()
+
+        # Draw 'A' and 'B' side markers along divider in screen space
+        pt_a = QPointF(hx - norm_dir.x() * 38.0, hy - norm_dir.y() * 38.0)
+        pt_b = QPointF(hx + norm_dir.x() * 38.0, hy + norm_dir.y() * 38.0)
+
+        marker_size = 16.0
+        rect_a = QRectF(pt_a.x() - marker_size / 2.0, pt_a.y() - marker_size / 2.0, marker_size, marker_size)
+        rect_b = QRectF(pt_b.x() - marker_size / 2.0, pt_b.y() - marker_size / 2.0, marker_size, marker_size)
+
+        painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+
+        # Marker A (Layer A)
+        painter.setBrush(QColor(24, 24, 24, 230))
+        painter.setPen(QPen(QColor(229, 168, 35, 230), 1.0))
+        painter.drawRoundedRect(rect_a, 3.0, 3.0)
+        painter.setPen(QColor(255, 220, 80))
+        painter.drawText(rect_a, Qt.AlignmentFlag.AlignCenter, "A")
+
+        # Marker B (Layer B)
+        painter.setBrush(QColor(24, 24, 24, 230))
+        painter.setPen(QPen(QColor(60, 160, 240, 230), 1.0))
+        painter.drawRoundedRect(rect_b, 3.0, 3.0)
+        painter.setPen(QColor(100, 200, 255))
+        painter.drawText(rect_b, Qt.AlignmentFlag.AlignCenter, "B")
+
+        painter.restore()
+
+    def _paint_split_overlay(self, painter: QPainter) -> None:
+        """Render side-by-side split mode 0% margin divider line and flush Layer A / Layer B header badges."""
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        has_img = (self._img_width > 0 and self._img_height > 0)
+        w = max(1.0, float(self.width()))
+        h = max(1.0, float(self.height()))
+
+        if has_img:
+            p_a_tl = self._image_norm_to_screen(0.0, 0.25)
+            p_a_br = self._image_norm_to_screen(0.5, 0.75)
+            p_b_tl = self._image_norm_to_screen(0.5, 0.25)
+            p_b_br = self._image_norm_to_screen(1.0, 0.75)
+            p_div_top = self._image_norm_to_screen(0.5, 0.0)
+            p_div_bot = self._image_norm_to_screen(0.5, 1.0)
+        else:
+            p_a_tl = QPointF(0.0, h * 0.25)
+            p_a_br = QPointF(w * 0.5, h * 0.75)
+            p_b_tl = QPointF(w * 0.5, h * 0.25)
+            p_b_br = QPointF(w, h * 0.75)
+            p_div_top = QPointF(w * 0.5, 0.0)
+            p_div_bot = QPointF(w * 0.5, h)
+
+        rect_a = QRectF(p_a_tl, p_a_br).normalized()
+        rect_b = QRectF(p_b_tl, p_b_br).normalized()
+
+        # 1. Crisp vertical dividing line between Layer A and B (0% margin flush seam)
+        pen_shadow = QPen(QColor(0, 0, 0, 180), 2.0)
+        painter.setPen(pen_shadow)
+        painter.drawLine(p_div_top, p_div_bot)
+        pen_div = QPen(QColor(180, 180, 180, 220), 1.0)
+        painter.setPen(pen_div)
+        painter.drawLine(p_div_top, p_div_bot)
+
+        # 2. Badges for Layer A and Layer B (flush at top with 0% margin)
+        badge_w, badge_h = 70.0, 20.0
+        badge_font = QFont("Segoe UI", 8, QFont.Weight.Bold)
+        painter.setFont(badge_font)
+
+        # Layer A Badge (flush top-left)
+        bx_a = max(0.0, rect_a.left())
+        by_a = max(0.0, rect_a.top())
+        badge_rect_a = QRectF(bx_a, by_a, badge_w, badge_h)
+        painter.setBrush(QColor(20, 20, 20, 225))
+        painter.setPen(QPen(QColor(229, 168, 35, 230), 1.0))
+        painter.drawRoundedRect(badge_rect_a, 3.0, 3.0)
+        painter.setPen(QColor(255, 215, 64))
+        painter.drawText(badge_rect_a, Qt.AlignmentFlag.AlignCenter, "Layer A")
+
+        # Layer B Badge (flush top-left of right half)
+        bx_b = max(rect_a.right(), rect_b.left())
+        by_b = max(0.0, rect_b.top())
+        badge_rect_b = QRectF(bx_b, by_b, badge_w, badge_h)
+        painter.setBrush(QColor(20, 20, 20, 225))
+        painter.setPen(QPen(QColor(60, 160, 240, 230), 1.0))
+        painter.drawRoundedRect(badge_rect_b, 3.0, 3.0)
+        painter.setPen(QColor(100, 200, 255))
+        painter.drawText(badge_rect_b, Qt.AlignmentFlag.AlignCenter, "Layer B")
+
         painter.restore()
 
     def _update_wipe_from_mouse(self, sx: float, sy: float) -> None:
@@ -787,6 +999,7 @@ class ViewportCanvas(QOpenGLWidget):
         p = (nx - 0.5) * aspect * dir_x + (ny - 0.5) * dir_y
         proj = (p / (2.0 * r_max) + 0.5) if r_max > 0.0001 else 0.5
         new_pos = max(0.0, min(1.0, float(proj)))
+        self.comparison_state.wipe_center = (max(0.0, min(1.0, float(nx))), max(0.0, min(1.0, float(ny))))
         self.comparison_state.wipe_position = new_pos
         self.wipe_position_changed.emit(new_pos)
         self.update()
@@ -1121,6 +1334,78 @@ class ViewportCanvas(QOpenGLWidget):
         self._pending_upload_b = True if image_data is not None else False
         self.update()
 
+    def set_matte_frame(self, image_data: Optional[np.ndarray]) -> None:
+        self._image_matte = image_data
+        self._pending_upload_matte = True if image_data is not None else False
+        if image_data is None and self._texture_matte is not None:
+            self._texture_matte.destroy()
+            self._texture_matte = None
+        self.update()
+
+    def _upload_texture_matte(self) -> None:
+        if not self.isValid() or self._image_matte is None:
+            return
+
+        arr = self._image_matte
+        h, w = arr.shape[:2]
+        if arr.dtype == np.uint8:
+            tex_fmt = QOpenGLTexture.TextureFormat.RGBA8_UNorm
+            px_type = QOpenGLTexture.PixelType.UInt8
+        else:
+            tex_fmt = QOpenGLTexture.TextureFormat.RGBA16F
+            px_type = QOpenGLTexture.PixelType.Float16
+            arr = arr if arr.dtype == np.float16 else arr.astype(np.float16, copy=False)
+
+        # Ensure array is 4-channel RGBA
+        if arr.ndim == 2:
+            rgba = np.empty((h, w, 4), dtype=arr.dtype)
+            rgba[..., :3] = arr[..., None]
+            rgba[..., 3] = arr
+            arr = rgba
+        elif arr.ndim == 3:
+            if arr.shape[2] == 1:
+                rgba = np.empty((h, w, 4), dtype=arr.dtype)
+                rgba[..., :3] = arr
+                rgba[..., 3] = arr[..., 0]
+                arr = rgba
+            elif arr.shape[2] == 3:
+                rgba = np.empty((h, w, 4), dtype=arr.dtype)
+                rgba[..., :3] = arr
+                rgba[..., 3] = 1.0 if arr.dtype != np.uint8 else 255
+                arr = rgba
+            elif arr.shape[2] > 4:
+                arr = arr[..., :4]
+
+        if not arr.flags["C_CONTIGUOUS"]:
+            arr = np.ascontiguousarray(arr)
+
+        if (
+            self._texture_matte is not None
+            and self._texture_matte.isCreated()
+            and self._texture_matte.width() == w
+            and self._texture_matte.height() == h
+            and getattr(self, "_texture_matte_fmt", None) == tex_fmt
+        ):
+            self._texture_matte.setData(QOpenGLTexture.PixelFormat.RGBA, px_type, arr)
+            return
+
+        if self._texture_matte is not None:
+            self._texture_matte.destroy()
+            self._texture_matte = None
+
+        self._texture_matte = QOpenGLTexture(QOpenGLTexture.Target.Target2D)
+        if not self._texture_matte.create():
+            self._texture_matte = None
+            return
+
+        self._texture_matte.setSize(w, h)
+        self._texture_matte.setFormat(tex_fmt)
+        self._texture_matte.allocateStorage(QOpenGLTexture.PixelFormat.RGBA, px_type)
+        self._texture_matte.setData(QOpenGLTexture.PixelFormat.RGBA, px_type, arr)
+        self._texture_matte.setMinMagFilters(QOpenGLTexture.Filter.Linear, QOpenGLTexture.Filter.Linear)
+        self._texture_matte.setWrapMode(QOpenGLTexture.WrapMode.ClampToEdge)
+        self._texture_matte_fmt = tex_fmt
+
     @property
     def image_width(self) -> int:
         return self._img_width
@@ -1140,12 +1425,42 @@ class ViewportCanvas(QOpenGLWidget):
         self.zoom_changed.emit(self._zoom)
         self.update()
 
+    def _effective_image_dimensions(self) -> Tuple[float, float]:
+        """Compute effective image width and height, accounting for pixel aspect ratio and Compare Plates side-by-side."""
+        img_w = float(self._img_width) * float(self.pixel_aspect_ratio)
+        img_h = float(self._img_height)
+        qc = getattr(self, "comp_qc_state", None)
+        if qc is not None and getattr(qc, "compare_plates", False) and self._texture_b is not None:
+            img_w *= 2.0
+        return img_w, img_h
+
+    def update_matte_expressions(self, expr_r: str, expr_g: str, expr_b: str, expr_a: str) -> None:
+        """Recompile fragment shader with updated channel expressions."""
+        new_src = build_fragment_shader(expr_r, expr_g, expr_b, expr_a)
+        if getattr(self, "_current_frag_src", None) == new_src:
+            return
+        self._current_frag_src = new_src
+        if not self.isValid():
+            return
+        self.makeCurrent()
+        new_prog = QOpenGLShaderProgram(self)
+        if not new_prog.addShaderFromSourceCode(QOpenGLShader.ShaderType.Vertex, VERTEX_SHADER_SOURCE):
+            return
+        if not new_prog.addShaderFromSourceCode(QOpenGLShader.ShaderType.Fragment, new_src):
+            return
+        if not new_prog.link():
+            return
+        self._uniform_loc_cache.clear()
+        if self._shader_program is not None:
+            self._shader_program.deleteLater()
+        self._shader_program = new_prog
+        self.update()
+
     def set_zoom_100(self) -> None:
         """Set zoom so 1 image pixel = 1 screen pixel."""
         viewport_w = max(1.0, float(self.width()))
         viewport_h = max(1.0, float(self.height()))
-        img_w = float(self._img_width) * float(self.pixel_aspect_ratio)
-        img_h = float(self._img_height)
+        img_w, img_h = self._effective_image_dimensions()
         is_rot_90 = (self.rotation % 180 != 0)
         disp_w = img_h if is_rot_90 else img_w
         disp_h = img_w if is_rot_90 else img_h
@@ -1161,8 +1476,7 @@ class ViewportCanvas(QOpenGLWidget):
         """Set zoom to a multiplier of 1:1 pixel scale (e.g. 1.0, 2.0, 4.0, 8.0)."""
         viewport_w = max(1.0, float(self.width()))
         viewport_h = max(1.0, float(self.height()))
-        img_w = float(self._img_width) * float(self.pixel_aspect_ratio)
-        img_h = float(self._img_height)
+        img_w, img_h = self._effective_image_dimensions()
         is_rot_90 = (self.rotation % 180 != 0)
         disp_w = img_h if is_rot_90 else img_w
         disp_h = img_w if is_rot_90 else img_h
@@ -1178,8 +1492,7 @@ class ViewportCanvas(QOpenGLWidget):
         """Fit image width to viewport width (Alt+F)."""
         viewport_w = max(1.0, float(self.width()))
         viewport_h = max(1.0, float(self.height()))
-        img_w = float(self._img_width) * float(self.pixel_aspect_ratio)
-        img_h = float(self._img_height)
+        img_w, img_h = self._effective_image_dimensions()
         is_rot_90 = (self.rotation % 180 != 0)
         disp_w = img_h if is_rot_90 else img_w
         disp_h = img_w if is_rot_90 else img_h
@@ -1351,8 +1664,7 @@ class ViewportCanvas(QOpenGLWidget):
         """Convert screen pixel coordinates to normalized (0.0 to 1.0) image coordinates."""
         vw = max(1.0, float(self.width()))
         vh = max(1.0, float(self.height()))
-        img_w = float(self._img_width) * float(self.pixel_aspect_ratio)
-        img_h = float(self._img_height)
+        img_w, img_h = self._effective_image_dimensions()
         is_rot_90 = (self.rotation % 180 != 0)
         disp_w = img_h if is_rot_90 else img_w
         disp_h = img_w if is_rot_90 else img_h
@@ -1380,8 +1692,7 @@ class ViewportCanvas(QOpenGLWidget):
     def _image_norm_to_screen(self, nx: float, ny: float) -> QPointF:
         vw = max(1.0, float(self.width()))
         vh = max(1.0, float(self.height()))
-        img_w = float(self._img_width) * float(self.pixel_aspect_ratio)
-        img_h = float(self._img_height)
+        img_w, img_h = self._effective_image_dimensions()
         is_rot_90 = (self.rotation % 180 != 0)
         disp_w = img_h if is_rot_90 else img_w
         disp_h = img_w if is_rot_90 else img_h
@@ -1452,7 +1763,7 @@ class ViewportCanvas(QOpenGLWidget):
     def mouseDoubleClickEvent(self, event) -> None:
         if (
             event.button() == Qt.MouseButton.LeftButton
-            and self.comparison_state.mode in (ComparisonMode.WIPE, ComparisonMode.SPLIT)
+            and self.comparison_state.mode == ComparisonMode.WIPE
         ):
             pos = event.position()
             mx, my = pos.x(), pos.y()
@@ -1950,23 +2261,39 @@ class ViewportCanvas(QOpenGLWidget):
             event.accept()
             return
 
-        # Interactive A/B Wipe / Rotation Dragging
+        # Interactive A/B Wipe / Rotation Dragging (Restricted to WIPE mode & handle/line hit-testing)
         if (
             event.button() == Qt.MouseButton.LeftButton
             and self._active_draw_tool is None
-            and self.comparison_state.mode in (ComparisonMode.WIPE, ComparisonMode.SPLIT)
+            and self.comparison_state.mode == ComparisonMode.WIPE
             and not (event.modifiers() & Qt.KeyboardModifier.AltModifier)
         ):
             mx, my = pos.x(), pos.y()
             rx, ry = self._wipe_rot_handle_center.x(), self._wipe_rot_handle_center.y()
+            hx, hy = self._wipe_handle_center.x(), self._wipe_handle_center.y()
             dist_rot = math.hypot(mx - rx, my - ry)
+            dist_handle = math.hypot(mx - hx, my - hy)
+            nx = self._wipe_screen_normal.x()
+            ny = self._wipe_screen_normal.y()
+            dist_line = abs((mx - hx) * nx + (my - hy) * ny)
 
-            if dist_rot <= 16.0 or (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            # Rotation drag on rotation knob or Ctrl+Click near handle/line
+            if dist_rot <= 16.0 or (event.modifiers() & Qt.KeyboardModifier.ControlModifier and (dist_handle <= 35.0 or dist_line <= 18.0)):
                 self._is_rotating_wipe = True
                 self._start_wipe_rotation(pos.x(), pos.y())
                 event.accept()
                 return
-            else:
+
+            # Shift+Click near handle or line toggles orientation between vertical (0°) and horizontal (90°)
+            if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) and (dist_handle <= 25.0 or dist_line <= 18.0):
+                self.comparison_state.flip_orientation()
+                self.wipe_angle_changed.emit(float(self.comparison_state.wipe_angle_deg))
+                self.update()
+                event.accept()
+                return
+
+            # Wipe position drag only if clicking directly on handle or near divider line
+            if dist_handle <= 22.0 or dist_line <= 18.0 or self._wipe_hover_part in ("line", "handle"):
                 self._is_wiping = True
                 self._update_wipe_from_mouse(pos.x(), pos.y())
                 event.accept()
@@ -2075,10 +2402,10 @@ class ViewportCanvas(QOpenGLWidget):
             event.accept()
             return
 
-        # Wipe Overlay Hover Tracking (when no mouse buttons are pressed)
+        # Wipe Overlay Hover Tracking (when no mouse buttons are pressed, restricted to WIPE mode)
         if (
             not event.buttons()
-            and self.comparison_state.mode in (ComparisonMode.WIPE, ComparisonMode.SPLIT)
+            and self.comparison_state.mode == ComparisonMode.WIPE
             and self._active_draw_tool is None
         ):
             hx, hy = self._wipe_handle_center.x(), self._wipe_handle_center.y()
@@ -2099,7 +2426,7 @@ class ViewportCanvas(QOpenGLWidget):
             elif dist_handle <= 22.0:
                 self._wipe_hover_part = "handle"
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
-            elif dist_line <= 8.0:
+            elif dist_line <= 14.0:
                 self._wipe_hover_part = "line"
                 self.setCursor(Qt.CursorShape.SplitHCursor if abs(nx) > abs(ny) else Qt.CursorShape.SplitVCursor)
             else:
@@ -2206,6 +2533,57 @@ class ViewportCanvas(QOpenGLWidget):
         super().mouseReleaseEvent(event)
 
     @staticmethod
+    def _build_smooth_bezier_path(points: list[QPointF]) -> QPainterPath:
+        """Construct a smooth Catmull-Rom to Cubic Bezier QPainterPath through points."""
+        path = QPainterPath()
+        if not points:
+            return path
+        if len(points) == 1:
+            path.moveTo(points[0])
+            path.lineTo(points[0])
+            return path
+        if len(points) == 2:
+            path.moveTo(points[0])
+            path.lineTo(points[1])
+            return path
+
+        # Filter out micro-jitter points that are too close (< 1.5 pixels)
+        filtered = [points[0]]
+        for p in points[1:]:
+            dx = p.x() - filtered[-1].x()
+            dy = p.y() - filtered[-1].y()
+            if dx * dx + dy * dy >= 2.25:
+                filtered.append(p)
+        if len(filtered) < 2:
+            filtered = [points[0], points[-1]]
+
+        n = len(filtered)
+        if n == 2:
+            path.moveTo(filtered[0])
+            path.lineTo(filtered[1])
+            return path
+
+        # Natural virtual endpoints for tangent continuity
+        p_prev = QPointF(2.0 * filtered[0].x() - filtered[1].x(), 2.0 * filtered[0].y() - filtered[1].y())
+        p_next = QPointF(2.0 * filtered[-1].x() - filtered[-2].x(), 2.0 * filtered[-1].y() - filtered[-2].y())
+        pts = [p_prev] + filtered + [p_next]
+
+        path.moveTo(filtered[0])
+        for i in range(1, n):
+            p0 = pts[i - 1]
+            p1 = pts[i]
+            p2 = pts[i + 1]
+            p3 = pts[i + 2]
+
+            # Catmull-Rom to Cubic Bezier control points (tension = 0.5)
+            c1 = QPointF(p1.x() + (p2.x() - p0.x()) / 6.0, p1.y() + (p2.y() - p0.y()) / 6.0)
+            c2 = QPointF(p2.x() - (p3.x() - p1.x()) / 6.0, p2.y() - (p3.y() - p1.y()) / 6.0)
+
+            path.cubicTo(c1, c2, p2)
+
+        return path
+
+    @staticmethod
     def _smooth_points_chaikin(points: list[Tuple[float, float]], iterations: int = 2) -> list[Tuple[float, float]]:
         """Apply Chaikin's corner-cutting subdivision algorithm to smooth polyline points."""
         if len(points) < 3:
@@ -2266,25 +2644,31 @@ class ViewportCanvas(QOpenGLWidget):
     # Drag-and-Drop Sequence Loading
     # --------------------------------------------------------------------------
     def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event) -> None:
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
             event.acceptProposedAction()
         else:
             super().dragMoveEvent(event)
 
     def dropEvent(self, event) -> None:
+        paths = []
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
+        elif event.mimeData().hasText():
+            t = event.mimeData().text().strip()
+            if os.path.exists(t):
+                paths = [t]
+
+        if paths:
             event.acceptProposedAction()
-            if paths:
-                # Decouple asynchronously so Windows OLE immediately releases drag cursor without freezing
-                QTimer.singleShot(0, lambda p=paths: self.files_dropped.emit(p))
+            # Decouple asynchronously so Windows OLE immediately releases drag cursor without freezing
+            QTimer.singleShot(0, lambda p=paths: self.files_dropped.emit(p))
         else:
             super().dropEvent(event)
 
@@ -2328,10 +2712,7 @@ class ViewportCanvas(QOpenGLWidget):
             if len(screen_pts) == 1:
                 painter.drawPoint(screen_pts[0])
             elif not is_draft:
-                path = QPainterPath()
-                path.moveTo(screen_pts[0])
-                for pt in screen_pts[1:]:
-                    path.lineTo(pt)
+                path = self._build_smooth_bezier_path(screen_pts)
                 painter.drawPath(path)
             else:
                 for i in range(len(screen_pts) - 1):
@@ -2604,6 +2985,72 @@ class ViewportCanvas(QOpenGLWidget):
                 painter.setPen(QPen(QColor(140, 140, 140, 160), 1))
                 painter.drawLine(QPointF(left + bar_w, top), QPointF(left + bar_w, bottom))
                 painter.drawLine(QPointF(right - bar_w, top), QPointF(right - bar_w, bottom))
+
+    def _paint_comp_qc_splines_overlay(self, painter: QPainter) -> None:
+        """Render imported Silhouette FX and Nuke spline overlays in image coordinates."""
+        qc = getattr(self, "comp_qc_state", None)
+        if not qc or not getattr(qc, "spline_overlay_enabled", False):
+            return
+        shapes = getattr(self, "comp_qc_splines", None)
+        if not shapes or self._img_width <= 0 or self._img_height <= 0:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        color = qc.spline_stroke_color
+        stroke_w = float(qc.spline_stroke_width)
+        pen = QPen(color, stroke_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+
+        fill_op = float(qc.spline_fill_opacity)
+        if fill_op > 0.001:
+            fill_col = QColor(color.red(), color.green(), color.blue(), int(round(fill_op * 255)))
+            painter.setBrush(fill_col)
+        else:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        img_w = float(self._img_width)
+        img_h = float(self._img_height)
+
+        for shape in shapes:
+            pts = shape.get_points_for_frame(self.current_frame)
+            if len(pts) < 2:
+                continue
+
+            path = QPainterPath()
+            first = True
+            for pt in pts:
+                # Convert pixel or normalized coordinate to normalized [0, 1]
+                nx = pt.x / img_w if pt.x > 1.5 else pt.x
+                # In Nuke/Silhouette coordinate space, Y=0 is bottom
+                raw_y = pt.y if pt.y > 1.5 else pt.y * img_h
+                ny = (img_h - raw_y) / img_h if pt.y > 1.5 else (1.0 - pt.y)
+
+                screen_pt = self._image_norm_to_screen(nx, ny)
+                if first:
+                    path.moveTo(screen_pt)
+                    first = False
+                else:
+                    path.lineTo(screen_pt)
+
+            if shape.is_closed and len(pts) >= 3:
+                path.closeSubpath()
+
+            painter.drawPath(path)
+
+            # Draw shape label
+            if pts:
+                first_nx = pts[0].x / img_w if pts[0].x > 1.5 else pts[0].x
+                first_raw_y = pts[0].y if pts[0].y > 1.5 else pts[0].y * img_h
+                first_ny = (img_h - first_raw_y) / img_h if pts[0].y > 1.5 else (1.0 - pts[0].y)
+                sp = self._image_norm_to_screen(first_nx, first_ny)
+                painter.setPen(QColor(color.red(), color.green(), color.blue(), 190))
+                font = QFont("Segoe UI", 8)
+                painter.setFont(font)
+                painter.drawText(QPointF(sp.x() + 4, sp.y() - 4), shape.name)
+                painter.setPen(pen)
+
+        painter.restore()
 
     def _paint_checker_overlay(self, painter: QPainter) -> None:
         """Render a subtle alternating checkerboard background behind media."""

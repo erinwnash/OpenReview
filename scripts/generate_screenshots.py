@@ -23,6 +23,8 @@ from openreview.ui.package_manager_dialog import PackageManagerDialog
 from openreview.ui.process_info_dialog import ProcessInfoDialog
 from openreview.ui.goto_frame_dialog import GoToFrameDialog
 from openreview.ui.preferences_dialog import PreferencesDialog
+from openreview.ui.about_dialog import AboutDialog
+
 
 OUTPUT_DIR = ROOT_DIR / "docs" / "html" / "assets" / "screenshots"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -204,6 +206,15 @@ def main():
     save_widget(window.hud_dailies_sync, "hud_dailies_sync.png")
     window.hud_dailies_sync.hide()
 
+    # 20b. HUD Comp QC (xtra QC Utils)
+    if hasattr(window, "comp_qc_dock") and window.comp_qc_dock:
+        window.comp_qc_dock.show()
+        window.comp_qc_dock.resize(360, 680)
+        app.processEvents()
+        save_widget(window.comp_qc_dock, "hud_comp_qc.png")
+        window.comp_qc_dock.hide()
+
+
     # 21. Dialog: Diagnostic Console Window
     if hasattr(window, "console_window"):
         window.console_window.resize(780, 440)
@@ -315,6 +326,18 @@ def main():
     except Exception as e:
         print("PreferencesDialog error:", e)
 
+    # Dialog: About Dialog
+    try:
+        about_dlg = AboutDialog(window)
+        about_dlg.resize(700, 540)
+        about_dlg.show()
+        app.processEvents()
+        save_widget(about_dlg, "dialog_about.png")
+        about_dlg.close()
+    except Exception as e:
+        print("AboutDialog error:", e)
+
+
     # 31. Viewport: A/B Split Wipe Mode
     try:
         window.comparison_state.mode = ComparisonMode.WIPE
@@ -391,7 +414,7 @@ def main():
         print("Viewport Safe Guides error:", e)
 
     window.close()
-    print("All 34 UI screenshots generated successfully!")
+    print("All 36 UI screenshots generated successfully!")
 
 if __name__ == "__main__":
     main()

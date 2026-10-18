@@ -24,6 +24,7 @@ class ComparisonState:
     mode: ComparisonMode = ComparisonMode.OFF
     wipe_position: float = 0.5  # 0.0 to 1.0
     wipe_angle_deg: float = 0.0  # 0.0 = vertical line (left/right split), 90.0 = horizontal line (top/bottom split)
+    wipe_center: tuple = (0.5, 0.5)  # Normalized (x, y) center pivot of the wipe control
     diff_boost: float = 1.0
     stack_mix: float = 1.0  # 0.0 to 1.0
     channels_a: tuple = (True, True, True, True)  # R, G, B, A
@@ -41,6 +42,7 @@ class ComparisonState:
         """Reset wipe parameters to default 50% split and vertical orientation."""
         self.wipe_position = 0.5
         self.wipe_angle_deg = 0.0
+        self.wipe_center = (0.5, 0.5)
         self.diff_boost = 1.0
 
     def flip_orientation(self) -> None:
@@ -57,6 +59,7 @@ class ComparisonState:
         self.mode = ComparisonMode.OFF
         self.wipe_position = 0.5
         self.wipe_angle_deg = 0.0
+        self.wipe_center = (0.5, 0.5)
         self.diff_boost = 1.0
         self.stack_mix = 1.0
         self.channels_a = (True, True, True, True)

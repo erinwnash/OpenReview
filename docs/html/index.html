@@ -11,11 +11,11 @@
   <header class="docs-header">
     <a href="index.html" class="brand">
       <span>Open<span class="accent">Review</span></span>
-      <span class="brand-meta">v1.0.0 • By Maruthu Chakravarthi</span>
+      <span class="brand-meta">v1.0.1 • By Maruthu Chakravarthi</span>
     </a>
     <ul class="nav-links">
       <li><a href="index.html" class="active">Application &amp; Architecture</a></li>
-      <li><a href="features.html">Features &amp; Shortcuts</a></li>
+      <li><a href="features.html">Features &amp; One-on-One Guide</a></li>
       <li><a href="use_cases.html">Use Cases &amp; Workflows</a></li>
       <li><a href="sdk.html">Python SDK, DCC &amp; Plugins</a></li>
     </ul>
@@ -50,6 +50,7 @@
         <li><a href="#hud-exr-stereo" class="sub-link">3.7 EXR Passes &amp; Stereo 3D</a></li>
         <li><a href="#hud-annot-mgr" class="sub-link">3.8 Annotation Manager HUD</a></li>
         <li><a href="#hud-source-details" class="sub-link">3.9 Source Media Details HUD</a></li>
+        <li><a href="#hud-comp-qc" class="sub-link">3.10 xtra QC Utils Suite (Comp QC)</a></li>
         <li><a href="#dialogs-windows">4. Studio Dialogs &amp; Diagnostics</a></li>
         <li><a href="#audio-system">5. Audio System &amp; Sync</a></li>
         <li><a href="#dailies-sync">6. Multi-User Remote Dailies Sync</a></li>
@@ -569,6 +570,22 @@
         </div>
       </div>
 
+      <!-- 3.10 xtra QC Utils Suite (Comp QC) HUD & Dock -->
+      <div class="panel-showcase" id="hud-comp-qc">
+        <img src="assets/screenshots/hud_comp_qc.png" alt="xtra QC Utils HUD and Dock Screenshot">
+        <div class="panel-details">
+          <h3>3.10 xtra QC Utils Compositing Suite (<span class="key-badge">Q</span>)</h3>
+          <p>Module: <code>packages/builtin/comp_qc/hud_comp_qc.py</code></p>
+          <ul>
+            <li><strong>Source Plate Comparison:</strong> Interactive drag-and-drop reference plate loading with instant prefetch caching, thumbnail generation, and dedicated plate unloading.</li>
+            <li><strong>Non-Destructive Diagnostic Color Grading:</strong> Real-time Gamma, Gain, Softclip Knee, Saturation multiplier, and Hue rotation sliders directly affecting viewport shaders.</li>
+            <li><strong>Frequency-Separated Grain &amp; High-Pass Inspection:</strong> Split-channel grain checking and Laplacian high-pass spatial filtering for seamless comp edge and grain integration verification.</li>
+            <li><strong>Black Level Elevation &amp; Shadow Seam QC:</strong> Pedestal lifting exposing matte edge bleeding and negative sensor floor values in dark comp regions.</li>
+            <li><strong>HSL Solos &amp; Floating-Point QC:</strong> Instant single-click isolation of Hue, Saturation, or Luminance components, paired with floating-point NaN/Inf and negative pixel detection.</li>
+          </ul>
+        </div>
+      </div>
+
       <!-- ================================================================== -->
       <!-- SECTION 4: STUDIO DIALOGS & DIAGNOSTICS -->
       <!-- ================================================================== -->
@@ -602,6 +619,11 @@
       <figure class="doc-figure" style="max-width: 480px; margin: 24px auto;">
         <img src="assets/screenshots/dialog_goto_frame.png" alt="Go To Frame Modal Dialog Screenshot">
         <figcaption><strong>Figure 4.5: Frameless Go To Frame HUD Modal (<span class="key-badge">Ctrl+G</span>)</strong> — Keyboard-first modal dialog with automatic range clamping, immediate spinbox focus, and single-Enter confirmation.</figcaption>
+      </figure>
+
+      <figure class="doc-figure" style="max-width: 720px; margin: 24px auto;">
+        <img src="assets/screenshots/dialog_about.png" alt="About OpenReview and License Inspector Screenshot">
+        <figcaption><strong>Figure 4.6: Studio About Dialog &amp; Third-Party License Inspector (<span class="key-badge">F1</span>)</strong> — Architecture overview, author attribution (Maruthu Chakravarthi), runtime telemetry, and interactive dependency license browser with search filtering.</figcaption>
       </figure>
 
       <!-- ================================================================== -->

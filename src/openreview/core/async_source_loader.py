@@ -9,11 +9,13 @@ import os
 from typing import List, Optional
 from PySide6.QtCore import QObject, Signal, QRunnable, QThreadPool
 
-from openreview.models.session_graph import SourceItem, build_source_item_from_path
+from openreview.models.session_graph import SourceItem, build_source_item_from_path, create_proxy_source_item
 
 
 class _SourceLoaderSignals(QObject):
     source_discovered = Signal(object, int, int)  # (SourceItem, current_index, total)
+    source_proxy_created = Signal(object, int, int)  # (SourceItem proxy, current_index, total)
+    source_resolved = Signal(str, object)  # (proxy_id, SourceItem real)
     batch_completed = Signal(list)  # List[SourceItem]
     progress_message = Signal(str)  # Progress status message
 
@@ -26,6 +28,7 @@ class _SourceProbeTask(QRunnable):
         total: int,
         parent_folder_id: Optional[str],
         signals: _SourceLoaderSignals,
+        proxy_id: Optional[str] = None,
         is_cancelled_fn=None,
     ):
         super().__init__()
@@ -34,6 +37,7 @@ class _SourceProbeTask(QRunnable):
         self.total = total
         self.parent_folder_id = parent_folder_id
         self.signals = signals
+        self.proxy_id = proxy_id
         self.is_cancelled_fn = is_cancelled_fn
 
     def run(self) -> None:
@@ -47,6 +51,8 @@ class _SourceProbeTask(QRunnable):
             item = build_source_item_from_path(self.path, self.parent_folder_id)
             if self.is_cancelled_fn and self.is_cancelled_fn():
                 return
+            if self.proxy_id and item:
+                self.signals.source_resolved.emit(self.proxy_id, item)
             self.signals.source_discovered.emit(item, self.index + 1, self.total)
         except Exception:
             self.signals.source_discovered.emit(None, self.index + 1, self.total)
@@ -57,9 +63,14 @@ class AsyncSourceLoader(QObject):
     Coordinates non-blocking asynchronous ingestion of media sources.
     Uses worker threads to probe media containers and sequences, dispatching
     discovered SourceItems back to the main GUI thread.
+    Modeled on Open RV's progressive source loading and proxy placeholder architecture.
     """
 
     source_discovered = Signal(object, int, int)  # (SourceItem, current_index, total)
+    source_proxy_created = Signal(object, int, int)  # (SourceItem proxy, current_index, total)
+    source_resolved = Signal(str, object)  # (proxy_id, SourceItem real)
+    before_progressive_loading = Signal(int)  # total count
+    after_progressive_loading = Signal(list)  # completed items
     batch_completed = Signal(list)  # List[SourceItem]
     progress_message = Signal(str)
 
@@ -69,6 +80,8 @@ class AsyncSourceLoader(QObject):
         self._thread_pool.setMaxThreadCount(max(1, min(max_workers, 4)))
         self._signals = _SourceLoaderSignals()
         self._signals.source_discovered.connect(self._on_source_discovered)
+        self._signals.source_proxy_created.connect(self.source_proxy_created.emit)
+        self._signals.source_resolved.connect(self.source_resolved.emit)
         self._signals.progress_message.connect(self.progress_message.emit)
 
         self._pending_count = 0
@@ -86,8 +99,17 @@ class AsyncSourceLoader(QObject):
         self._pending_count = 0
         self._discovered_items.clear()
 
-    def load_paths_async(self, paths: List[str], parent_folder_id: Optional[str] = None) -> None:
-        """Queue multiple paths for non-blocking background discovery."""
+    def load_paths_async(
+        self,
+        paths: List[str],
+        parent_folder_id: Optional[str] = None,
+        use_progressive_proxies: bool = True,
+    ) -> None:
+        """
+        Queue multiple paths for non-blocking background discovery.
+        If use_progressive_proxies is True, immediately creates placeholder proxy items
+        (modeled on Open RV's movieProxie) enabling instant zero-latency UI appearance.
+        """
         if not paths:
             self.batch_completed.emit([])
             return
@@ -98,13 +120,22 @@ class AsyncSourceLoader(QObject):
         self._pending_count = len(paths)
         self._discovered_items = []
 
+        self.before_progressive_loading.emit(self._total_count)
+
         for idx, path in enumerate(paths):
+            proxy_id = None
+            if use_progressive_proxies:
+                proxy_item = create_proxy_source_item(path, parent_folder_id)
+                proxy_id = proxy_item.id
+                self.source_proxy_created.emit(proxy_item, idx + 1, self._total_count)
+
             task = _SourceProbeTask(
                 path=path,
                 index=idx,
                 total=self._total_count,
                 parent_folder_id=parent_folder_id,
                 signals=self._signals,
+                proxy_id=proxy_id,
                 is_cancelled_fn=lambda g=curr_gen: g < self._generation,
             )
             self._thread_pool.start(task)
@@ -119,4 +150,5 @@ class AsyncSourceLoader(QObject):
             completed_batch = list(self._discovered_items)
             self._discovered_items.clear()
             self.progress_message.emit("Source indexing complete.")
+            self.after_progressive_loading.emit(completed_batch)
             self.batch_completed.emit(completed_batch)

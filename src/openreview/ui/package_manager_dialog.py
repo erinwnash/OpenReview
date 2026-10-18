@@ -49,6 +49,8 @@ class PackageManagerDialog(QDialog):
         self.updater = SoftwareUpdater()
 
         self._setup_ui()
+        if hasattr(self.pkg_mgr, "packages_changed"):
+            self.pkg_mgr.packages_changed.connect(self._on_packages_changed)
         self._refresh_package_table()
 
     def _setup_ui(self) -> None:
@@ -170,6 +172,7 @@ class PackageManagerDialog(QDialog):
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
+        self.table.cellClicked.connect(lambda r, c: self._on_row_selected())
         splitter.addWidget(self.table)
 
         # Inspector Panel
@@ -307,10 +310,18 @@ class PackageManagerDialog(QDialog):
     # --------------------------------------------------------------------------
     # Plugin Table Handlers
     # --------------------------------------------------------------------------
-    def _refresh_package_table(self) -> None:
+    def _refresh_package_table(self, select_name: Optional[str] = None) -> None:
+        if select_name is None:
+            cur = self._get_selected_manifest()
+            if cur:
+                select_name = cur.name
+
         packages = self.pkg_mgr.discover_packages()
+
+        self.table.blockSignals(True)
         self.table.setRowCount(len(packages))
 
+        target_row = 0
         for row, p in enumerate(packages):
             item_name = QTableWidgetItem(p.name)
             item_name.setData(Qt.ItemDataRole.UserRole, p.name)
@@ -331,8 +342,16 @@ class PackageManagerDialog(QDialog):
             self.table.setItem(row, 2, item_status)
             self.table.setItem(row, 3, item_type)
 
+            if select_name and (p.name == select_name or p.id == select_name):
+                target_row = row
+
+        self.table.blockSignals(False)
+
         if packages:
-            self.table.selectRow(0)
+            self.table.setCurrentCell(target_row, 0)
+            self.table.selectRow(target_row)
+
+        self._on_row_selected()
 
     def _get_selected_manifest(self) -> Optional[PackageManifest]:
         row = self.table.currentRow()
@@ -354,6 +373,8 @@ class PackageManagerDialog(QDialog):
             self.lbl_det_path.setText("-")
             self.btn_uninstall.setEnabled(False)
             self.btn_toggle_enable.setEnabled(False)
+            self.btn_toggle_enable.setText("Enable Plugin")
+            self.btn_toggle_enable.setStyleSheet("")
             return
 
         self.lbl_det_name.setText(p.name)
@@ -363,14 +384,60 @@ class PackageManagerDialog(QDialog):
         self.lbl_det_path.setText(p.package_path)
 
         self.btn_toggle_enable.setEnabled(True)
-        self.btn_toggle_enable.setText("Disable Plugin" if p.enabled else "Enable Plugin")
+        if p.enabled:
+            self.btn_toggle_enable.setText("Disable Plugin")
+            self.btn_toggle_enable.setStyleSheet("""
+                QPushButton {
+                    background-color: #4a2424;
+                    color: #ff9999;
+                    border: 1px solid #783838;
+                    border-radius: 3px;
+                    padding: 5px 14px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #6a3232;
+                    color: #ffffff;
+                    border-color: #a84848;
+                }
+                QPushButton:pressed {
+                    background-color: #381a1a;
+                }
+            """)
+        else:
+            self.btn_toggle_enable.setText("Enable Plugin")
+            self.btn_toggle_enable.setStyleSheet("""
+                QPushButton {
+                    background-color: #204829;
+                    color: #99ffaa;
+                    border: 1px solid #327540;
+                    border-radius: 3px;
+                    padding: 5px 14px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #2b6137;
+                    color: #ffffff;
+                    border-color: #449e57;
+                }
+                QPushButton:pressed {
+                    background-color: #17361e;
+                }
+            """)
         self.btn_uninstall.setEnabled(not p.is_builtin)
 
     def _on_toggle_enable_selected(self) -> None:
         p = self._get_selected_manifest()
         if p:
-            self.pkg_mgr.set_package_enabled(p.name, not p.enabled)
-            self._refresh_package_table()
+            target_name = p.name
+            new_enabled = not p.enabled
+            self.pkg_mgr.set_package_enabled(target_name, new_enabled)
+            self._refresh_package_table(select_name=target_name)
+
+    def _on_packages_changed(self) -> None:
+        cur = self._get_selected_manifest()
+        sel = cur.name if cur else None
+        self._refresh_package_table(select_name=sel)
 
     def _on_uninstall_selected(self) -> None:
         p = self._get_selected_manifest()

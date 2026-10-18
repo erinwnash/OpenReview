@@ -27,6 +27,7 @@ MANIFEST
 # OpenReview standalone build artifacts & distributions
 # (Installer binaries and archives are hosted via GitHub Releases)
 Openreview_build/
+OpenRV_2.0.0_Win10_x64/
 *.msi
 *.cab
 *.deb

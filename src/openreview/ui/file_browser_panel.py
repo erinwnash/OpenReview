@@ -57,6 +57,7 @@ from openreview.core.sequence_parser import (
 from openreview.core.video_reader import VIDEO_EXTENSIONS, is_video_file
 from openreview.core.image_io import IMAGE_EXTENSIONS
 from openreview.core.preferences import PreferencesManager
+from openreview.ui.dock_title_bar import TabbedDockTitleBar
 
 AUDIO_EXTENSIONS = {
     ".wav", ".mp3", ".aac", ".flac", ".ogg", ".aiff", ".m4a",
@@ -1647,6 +1648,7 @@ class FileBrowserDockWidget(QDockWidget):
         super().__init__("File Browser", parent)
         self.setObjectName("FileBrowserDockWidget")
         self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self.setTitleBarWidget(TabbedDockTitleBar(self))
         self.panel = FileBrowserPanelWidget(self)
         self.setWidget(self.panel)
 

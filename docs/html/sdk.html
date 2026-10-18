@@ -11,11 +11,11 @@
   <header class="docs-header">
     <a href="index.html" class="brand">
       <span>Open<span class="accent">Review</span></span>
-      <span class="brand-meta">v1.0.0 • By Maruthu Chakravarthi</span>
+      <span class="brand-meta">v1.0.1 • By Maruthu Chakravarthi</span>
     </a>
     <ul class="nav-links">
       <li><a href="index.html">Application &amp; Architecture</a></li>
-      <li><a href="features.html">Features &amp; Shortcuts</a></li>
+      <li><a href="features.html">Features &amp; One-on-One Guide</a></li>
       <li><a href="use_cases.html">Use Cases &amp; Workflows</a></li>
       <li><a href="sdk.html" class="active">Python SDK, DCC &amp; Plugins</a></li>
     </ul>
@@ -477,6 +477,12 @@ if on_blender_render_complete not in bpy.app.handlers.render_complete:
           </tr>
         </tbody>
       </table>
+
+      <!-- 4.3 Built-in Production Reference: xtra QC Utils -->
+      <h3 id="plugin-builtin-qc">4.3 Built-in Production Reference: xtra QC Utils</h3>
+      <p>
+        OpenReview ships with a full-featured built-in package, <strong>xtra QC Utils</strong> (<code>openreview/packages/builtin/comp_qc/</code>), authored as a canonical reference implementation. It integrates a dedicated dock and HUD panel (<span class="key-badge">Q</span>), hooks into viewport fragment shader uniforms for Softclip Knee and highpass convolution, manages background prefetching of reference plates and RGBA mattes, and responds to session resets seamlessly.
+      </p>
 
       <!-- ================================================================== -->
       <!-- 5. CUSTOM PLUGIN RECOMMENDATIONS WITH COMPLETE EXAMPLES -->

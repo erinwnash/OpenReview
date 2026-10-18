@@ -1,8 +1,9 @@
 # OpenReview System Architecture Specification
 
 **Author:** Maruthu Chakravarthi  
-**Version:** 1.0.0  
+**Version:** 1.0.1  
 **HTML Portal:** [docs/html/index.html](file:///e:/works/Pipeline/code/OpenReview/docs/html/index.html)
+
 
 OpenReview is a studio-grade visual effects (VFX) sequence playback, high-dynamic-range (HDR) color inspection, multi-source compositing comparison, and collaborative dailies review workstation application built on **Python 3.10+**, **PySide6 (Qt 6)**, **OpenGL 3.3+ Core Profile**, and **OpenColorIO v2**.
 
@@ -78,11 +79,12 @@ flowchart TB
 
 ### 2.1 Layer 1: IPC, Package Management & File Associations
 - **JSON-RPC 2.0 IPC Server (`network/ipc_server.py`):** Binds on `127.0.0.1:45124` to receive automation commands from DCC applications (Nuke, Maya, Houdini, Blender) and command-line scripts.
-- **PackageManager (`packages/manager.py`):** Dynamically discovers and loads modular studio packages from built-in directories, `~/.openreview/packages/`, or `OPENREVIEW_PACKAGE_PATH`.
+- **PackageManager (`packages/manager.py`):** Dynamically discovers and loads modular studio packages from built-in directories, `~/.openreview/packages/`, or `OPENREVIEW_PACKAGE_PATH`. Includes the built-in `xtra-qc-Utils` (`openreview/packages/builtin/comp_qc/`) suite providing real-time Softclip Knee, frequency-separated grain inspection, high-pass edge filters, and shadow black level elevation (`Q`).
 - **System File Associations (`core/file_associations.py`):** Registers shell associations for visual effects formats (`.exr`, `.dpx`, `.cin`, `.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`, `.mov`, `.mp4`, `.ovr`) across Windows Registry and Linux XDG MIME systems.
 
 ### 2.2 Layer 2: Core Orchestration, Diagnostics & Export Pipeline
 - **MainWindow (`ui/main_window.py`):** Central coordinator integrating docked panels, floating HUD cards, viewport canvas, and top menu hierarchy (organized and sorted ascendingly by category). Includes low-resolution monitor scaling (down to 1920x1080 FHD) and clean Windows taskbar handling in Fullscreen (`F12`) and Presentation (`Ctrl+P`) modes.
+- **Studio About & License Inspector (`ui/about_dialog.py`):** Dedicated dialog (`F1`) detailing architecture, versioning, author attribution (Maruthu Chakravarthi), and interactive master-detail third-party dependency license inspector.
 - **SessionGraph (`models/session_graph.py`):** Hierarchical DAG model storing sources, clips, stacks, versions, and multi-view layouts with non-destructive session serialization (`.ovr`).
 - **Live Console Window (`ui/console_dialog.py`):** Intercepts standard log streams, provides severity level filtering (DEBUG, INFO, WARNING, ERROR, CRITICAL), and automatically pops up whenever an unhandled error is logged (`Ctrl+Shift+L`).
 - **Comprehensive Media Export Engine (`ui/export_media_dialog.py`):** Exports single frames, selected in-out ranges, or entire sequences to OpenEXR, QuickTime MOV (ProRes, DNxHD, H.264), DPX, TIFF, and PNG with selectable downrez scaling, colorspace transforms, and burned-in review annotations.

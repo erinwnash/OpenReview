@@ -75,3 +75,55 @@ def test_async_source_loader_process():
 
         assert len(completed) == 3
         assert len(discovered) == 3
+
+
+def test_progressive_source_loader_lifecycle():
+    from openreview.models.session_graph import create_proxy_source_item
+    app = QCoreApplication.instance() or QCoreApplication([])
+
+    # Test direct proxy generation
+    proxy = create_proxy_source_item("/path/to/my_shot.exr", parent_folder_id="bin1")
+    assert proxy.is_proxy is True
+    assert proxy.proxy_resolved is False
+    assert proxy.duration == 24
+    assert proxy.name == "my_shot.exr"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        paths = []
+        for i in range(2):
+            p = os.path.join(tmpdir, f"clip_{i}.png")
+            _create_dummy_image(p)
+            paths.append(p)
+
+        loader = AsyncSourceLoader()
+        before_count = []
+        proxies_created = []
+        resolved_items = []
+        after_batch = []
+
+        loader.before_progressive_loading.connect(lambda cnt: before_count.append(cnt))
+        loader.source_proxy_created.connect(lambda p_item, cur, tot: proxies_created.append(p_item))
+        loader.source_resolved.connect(lambda pid, real_item: resolved_items.append((pid, real_item)))
+        loader.after_progressive_loading.connect(lambda b: after_batch.extend(b))
+
+        loader.load_paths_async(paths, use_progressive_proxies=True)
+
+        # Proxies should be emitted immediately before worker processing
+        assert len(before_count) == 1
+        assert before_count[0] == 2
+        assert len(proxies_created) == 2
+        assert all(p.is_proxy for p in proxies_created)
+
+        # Process Qt events until workers resolve
+        timeout_loops = 100
+        while len(resolved_items) < 2 and timeout_loops > 0:
+            app.processEvents()
+            QCoreApplication.processEvents()
+            timeout_loops -= 1
+            import time
+            time.sleep(0.02)
+
+        assert len(resolved_items) == 2
+        assert len(after_batch) == 2
+        # Real items should not be proxies
+        assert all(not r[1].is_proxy for r in resolved_items)

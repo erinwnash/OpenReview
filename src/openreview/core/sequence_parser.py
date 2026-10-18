@@ -181,6 +181,7 @@ class DiskSequenceReader(MediaReader):
         self.seq = sequence_info
         self.active_layer = active_layer
         self._last_valid_frame_data: Optional[np.ndarray] = None
+        self._last_valid_frame_idx: Optional[int] = None
         self._cached_width = 1920
         self._cached_height = 1080
 
@@ -188,6 +189,7 @@ class DiskSequenceReader(MediaReader):
         if self.active_layer != layer:
             self.active_layer = layer
             self._last_valid_frame_data = None
+            self._last_valid_frame_idx = None
 
     def read_frame(self, frame: int) -> Optional[np.ndarray]:
         path = self.seq.frame_path(frame)
@@ -197,25 +199,31 @@ class DiskSequenceReader(MediaReader):
             arr = read_image_file(path, layer=self.active_layer)
             if arr is not None:
                 self._last_valid_frame_data = arr
+                self._last_valid_frame_idx = frame
                 self._cached_height, self._cached_width = arr.shape[:2]
                 return arr
 
-        # Gap-handling: if missing, hold previous valid frame or read closest available frame
-        if self._last_valid_frame_data is not None:
-            return self._last_valid_frame_data
-
+        # Gap-handling / closest available frame resolution
         if self.seq.available_frames:
             sorted_avail = sorted(self.seq.available_frames)
             prev_frames = [f for f in sorted_avail if f < frame]
             target_f = prev_frames[-1] if prev_frames else sorted_avail[0]
+
+            if self._last_valid_frame_idx == target_f and self._last_valid_frame_data is not None:
+                return self._last_valid_frame_data
+
             target_path = self.seq.frame_path(target_f)
             if os.path.exists(target_path):
                 from openreview.core.image_io import read_image_file
                 arr = read_image_file(target_path, layer=self.active_layer)
                 if arr is not None:
                     self._last_valid_frame_data = arr
+                    self._last_valid_frame_idx = target_f
                     self._cached_height, self._cached_width = arr.shape[:2]
                     return arr
+
+        if self._last_valid_frame_data is not None:
+            return self._last_valid_frame_data
 
         # Fallback empty black frame with resolution
         black = np.zeros((self._cached_height, self._cached_width, 4), dtype=np.float32)

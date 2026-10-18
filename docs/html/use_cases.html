@@ -11,11 +11,11 @@
   <header class="docs-header">
     <a href="index.html" class="brand">
       <span>Open<span class="accent">Review</span></span>
-      <span class="brand-meta">v1.0.0 • By Maruthu Chakravarthi</span>
+      <span class="brand-meta">v1.0.1 • By Maruthu Chakravarthi</span>
     </a>
     <ul class="nav-links">
       <li><a href="index.html">Application &amp; Architecture</a></li>
-      <li><a href="features.html">Features &amp; Shortcuts</a></li>
+      <li><a href="features.html">Features &amp; One-on-One Guide</a></li>
       <li><a href="use_cases.html" class="active">Use Cases &amp; Workflows</a></li>
       <li><a href="sdk.html">Python SDK, DCC &amp; Plugins</a></li>
     </ul>
@@ -102,7 +102,16 @@
         <li>
           <strong>Inspect Raw Pixel Grain &amp; Black Toe (<span class="key-badge">N</span> &amp; <span class="key-badge">Shift+I</span>):</strong> Zoom in to <code>400%</code> (<span class="key-badge">Ctrl+4</span>) or <code>800%</code> (<span class="key-badge">Ctrl+8</span>), press <span class="key-badge">N</span> to switch from Bilinear smoothing to <strong>Nearest-Neighbor Pixelated</strong> mode, solo the <strong>Blue Channel (<span class="key-badge">B</span>)</strong> (where film/digital sensor noise is strongest), and press <span class="key-badge">Shift+I</span> (<strong>Invert Colors</strong>) or boost Gamma (<span class="key-badge">Shift++</span>) to verify that synthetic grain matches the plate seamlessly.
         </li>
+        <li>
+          <strong>Execute Technical Comp QC via xtra-QC Utils (<span class="key-badge">Q</span>):</strong> Toggle the dedicated <strong>xtra QC Utils Suite</strong> dock (<span class="key-badge">Q</span>). Drag the original ungraded camera plate into the <em>Source Plate</em> drop zone and click <em>Prefetch Source</em>. Use the <strong>Softclip Knee</strong> slider to verify highlight dynamic range, toggle <strong>Grain Check Mode</strong> across split frequencies to verify grain structure, engage the <strong>Highpass Edge Filter</strong> to audit sub-pixel defringing, and lift <strong>Black Levels</strong> to expose matte seam leaks in shadows.
+        </li>
       </ol>
+
+      <figure class="doc-figure">
+        <img src="assets/screenshots/hud_comp_qc.png" alt="xtra QC Utils Dock and HUD Screenshot" style="max-width: 480px; margin: 0 auto;">
+        <figcaption><strong>Figure 2.2:</strong> xtra QC Utils Suite (<span class="key-badge">Q</span>) hosting Source Plate prefetching, Softclip Knee highlight compression, frequency-separated grain inspection, highpass edge filters, and shadow black level elevation.</figcaption>
+      </figure>
+
 
       <!-- ================================================================== -->
       <!-- WORKFLOW 3: MULTI-LAYER STACKING & TILED CONTACT SHEETS -->

@@ -11,13 +11,15 @@ import subprocess
 from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QPoint, QPointF, QRect, QSize, QMimeData, QModelIndex, QTimer
+from PySide6.QtCore import Qt, Signal, QPoint, QPointF, QRect, QSize, QMimeData, QModelIndex, QTimer, QEvent, QUrl
 from PySide6.QtGui import QIcon, QAction, QCursor, QDragEnterEvent, QDropEvent, QPainter, QColor, QPen, QKeyEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QWidget,
     QDockWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QFormLayout,
     QTreeWidget,
     QTreeWidgetItem,
@@ -39,6 +41,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
     QSplitter,
+    QSizePolicy,
 )
 
 from openreview.resources import get_branch_closed_icon_path, get_branch_open_icon_path, get_vfx_icon
@@ -54,6 +57,7 @@ from openreview.models.session_graph import (
     ViewType,
 )
 from openreview.core.sequence_parser import detect_image_sequence
+from openreview.ui.dock_title_bar import TabbedDockTitleBar
 
 
 class MediaSourcesTreeWidget(QTreeWidget):
@@ -68,6 +72,31 @@ class MediaSourcesTreeWidget(QTreeWidget):
         self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setDragEnabled(True)
+
+    def mimeData(self, items: List[QTreeWidgetItem]) -> QMimeData:
+        mime = super().mimeData(items)
+        if not mime:
+            mime = QMimeData()
+        urls = []
+        paths = []
+        for item in items:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(data, dict):
+                iid = data.get("id")
+                # Look up source path from session graph if available
+                panel = self.parent()
+                while panel and not hasattr(panel, "session_graph"):
+                    panel = panel.parent() if hasattr(panel, "parent") else None
+                if panel and hasattr(panel, "session_graph"):
+                    src = panel.session_graph.sources.get(iid)
+                    if src and src.path:
+                        paths.append(src.path)
+                        urls.append(QUrl.fromLocalFile(src.path))
+        if urls:
+            mime.setUrls(urls)
+        if paths:
+            mime.setText(paths[0])
+        return mime
 
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
@@ -141,6 +170,7 @@ class SourcesPanelWidget(QWidget):
         self.graph = graph
         self.setMinimumWidth(240)
         self._suppress_tree_events = False
+        self._source_selection_order: List[str] = []
 
         self._setup_ui()
         self._connect_signals()
@@ -435,7 +465,11 @@ class SourcesPanelWidget(QWidget):
         inputs_body = QHBoxLayout()
         self.list_inputs = QListWidget(self.tab_inputs)
         self.list_inputs.itemSelectionChanged.connect(self._on_input_selected)
+        self.list_inputs.itemClicked.connect(self._on_input_item_clicked)
         self.list_inputs.itemDoubleClicked.connect(self._on_input_item_double_clicked)
+        self.list_inputs.viewport().installEventFilter(self)
+        self.list_inputs.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_inputs.customContextMenuRequested.connect(self._on_inputs_context_menu)
         inputs_body.addWidget(self.list_inputs, stretch=1)
 
         # Reorder and delete controls with SVG icons
@@ -483,9 +517,10 @@ class SourcesPanelWidget(QWidget):
         self.slider_stack_mix = QSlider(Qt.Orientation.Horizontal, self.stack_tools_frame)
         self.slider_stack_mix.setRange(0, 100)
         self.slider_stack_mix.setValue(100)
+        self.slider_stack_mix.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.slider_stack_mix.setToolTip("Onion Skin Mix: Controls how much of Layer A mixes over Layer B (0.0 - 1.0)")
         self.slider_stack_mix.valueChanged.connect(self._on_stack_mix_slider_changed)
-        onion_row.addWidget(self.slider_stack_mix)
+        onion_row.addWidget(self.slider_stack_mix, stretch=1)
 
         self.spin_stack_mix = QDoubleSpinBox(self.stack_tools_frame)
         self.spin_stack_mix.setRange(0.0, 1.0)
@@ -495,36 +530,6 @@ class SourcesPanelWidget(QWidget):
         self.spin_stack_mix.setFixedWidth(52)
         self.spin_stack_mix.valueChanged.connect(self._on_stack_mix_spin_changed)
         onion_row.addWidget(self.spin_stack_mix)
-
-        onion_row.addSpacing(4)
-
-        self.chk_layer_a_r = QCheckBox("R", self.stack_tools_frame)
-        self.chk_layer_a_r.setChecked(True)
-        self.chk_layer_a_r.setStyleSheet("color: #ff6b6b; font-weight: bold;")
-        self.chk_layer_a_r.setToolTip("Layer A Red Channel")
-        self.chk_layer_a_r.toggled.connect(self._on_stack_channels_changed)
-        onion_row.addWidget(self.chk_layer_a_r)
-
-        self.chk_layer_a_g = QCheckBox("G", self.stack_tools_frame)
-        self.chk_layer_a_g.setChecked(True)
-        self.chk_layer_a_g.setStyleSheet("color: #51cf66; font-weight: bold;")
-        self.chk_layer_a_g.setToolTip("Layer A Green Channel")
-        self.chk_layer_a_g.toggled.connect(self._on_stack_channels_changed)
-        onion_row.addWidget(self.chk_layer_a_g)
-
-        self.chk_layer_a_b = QCheckBox("B", self.stack_tools_frame)
-        self.chk_layer_a_b.setChecked(True)
-        self.chk_layer_a_b.setStyleSheet("color: #339af0; font-weight: bold;")
-        self.chk_layer_a_b.setToolTip("Layer A Blue Channel")
-        self.chk_layer_a_b.toggled.connect(self._on_stack_channels_changed)
-        onion_row.addWidget(self.chk_layer_a_b)
-
-        self.chk_layer_a_a = QCheckBox("A", self.stack_tools_frame)
-        self.chk_layer_a_a.setChecked(True)
-        self.chk_layer_a_a.setStyleSheet("color: #ffffff; font-weight: bold;")
-        self.chk_layer_a_a.setToolTip("Layer A Alpha Channel (Unchecked treats Layer A as solid)")
-        self.chk_layer_a_a.toggled.connect(self._on_stack_channels_changed)
-        onion_row.addWidget(self.chk_layer_a_a)
 
         stack_tools_vbox.addLayout(onion_row)
 
@@ -543,6 +548,7 @@ class SourcesPanelWidget(QWidget):
 
         self.combo_stack_mode = QComboBox(self.stack_tools_frame)
         self.combo_stack_mode.addItems(["Wipe", "A/B Switch", "Difference", "Inverted Diff", "Split", "Over", "Add"])
+        self.combo_stack_mode.setCurrentText("A/B Switch")
         self.combo_stack_mode.currentIndexChanged.connect(self._on_stack_mode_changed)
         layers_row.addWidget(self.combo_stack_mode)
 
@@ -835,6 +841,16 @@ class SourcesPanelWidget(QWidget):
     def _on_tree_selection_changed(self) -> None:
         if self._suppress_tree_events:
             return
+        curr_selected = set()
+        for item in self.tree.selectedItems():
+            d = item.data(0, Qt.ItemDataRole.UserRole)
+            if d and d.get("type") == "source" and "id" in d:
+                curr_selected.add(d["id"])
+        if hasattr(self, "_source_selection_order"):
+            self._source_selection_order = [sid for sid in self._source_selection_order if sid in curr_selected]
+            for sid in curr_selected:
+                if sid not in self._source_selection_order:
+                    self._source_selection_order.append(sid)
         self._refresh_subpanels()
 
     def _on_tree_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
@@ -1054,6 +1070,13 @@ class SourcesPanelWidget(QWidget):
         return nodes
 
     def _get_selected_source_ids(self) -> List[str]:
+        curr_selected = set(d["id"] for d in self._get_selected_nodes() if d.get("type") == "source")
+        if hasattr(self, "_source_selection_order") and self._source_selection_order:
+            ordered = [sid for sid in self._source_selection_order if sid in curr_selected]
+            for sid in curr_selected:
+                if sid not in ordered:
+                    ordered.append(sid)
+            return ordered
         return [d["id"] for d in self._get_selected_nodes() if d.get("type") == "source"]
 
     # --------------------------------------------------------------------------
@@ -1375,13 +1398,20 @@ class SourcesPanelWidget(QWidget):
                 src = self.graph.sources.get(sid)
                 name = src.name if src else "Missing Source"
                 tag = ""
-                if idx == viewable.index_a:
+                if idx == viewable.index_a and idx == viewable.index_b:
+                    tag += " [A/B]"
+                elif idx == viewable.index_a:
                     tag += " [A]"
-                if idx == viewable.index_b:
+                elif idx == viewable.index_b:
                     tag += " [B]"
+                if idx == viewable.current_layer_index and viewable.compare_mode == "switch":
+                    tag += " (Active)"
                 item = QListWidgetItem(f"{name}{tag}")
                 item.setData(Qt.ItemDataRole.UserRole, idx)
                 self.list_inputs.addItem(item)
+
+            if 0 <= viewable.current_layer_index < self.list_inputs.count():
+                self.list_inputs.setCurrentRow(viewable.current_layer_index)
 
             # Match mode in combo
             modes_map = {
@@ -1393,7 +1423,7 @@ class SourcesPanelWidget(QWidget):
                 "over": "Over",
                 "add": "Add",
             }
-            cur_mode = modes_map.get(viewable.compare_mode, "Over")
+            cur_mode = modes_map.get(viewable.compare_mode, "A/B Switch")
             idx = self.combo_stack_mode.findText(cur_mode)
             if idx >= 0:
                 self.combo_stack_mode.blockSignals(True)
@@ -1409,15 +1439,6 @@ class SourcesPanelWidget(QWidget):
             self.spin_stack_mix.blockSignals(True)
             self.spin_stack_mix.setValue(mix_val)
             self.spin_stack_mix.blockSignals(False)
-
-            chs = getattr(viewable, "channels_a", (True, True, True, True))
-            for chk, state in zip(
-                (self.chk_layer_a_r, self.chk_layer_a_g, self.chk_layer_a_b, self.chk_layer_a_a),
-                chs,
-            ):
-                chk.blockSignals(True)
-                chk.setChecked(bool(state))
-                chk.blockSignals(False)
 
         elif vtype == ViewType.LAYOUT and isinstance(viewable, LayoutView):
             self.lbl_inputs_view.setText(f"Layout: {viewable.name}")
@@ -1540,6 +1561,49 @@ class SourcesPanelWidget(QWidget):
     def _on_input_selected(self) -> None:
         pass
 
+    def _on_input_item_clicked(self, item: QListWidgetItem) -> None:
+        """Clicking an input highlights it in the list without altering Layer A/B until user sets it."""
+        row = self.list_inputs.row(item)
+        if row >= 0:
+            self.list_inputs.setCurrentRow(row)
+
+    def _on_inputs_context_menu(self, pos: QPoint) -> None:
+        """Right-click menu on stack inputs list to assign Layer A or Layer B."""
+        item = self.list_inputs.itemAt(pos)
+        if not item:
+            return
+        row = self.list_inputs.row(item)
+        viewable = self.graph.get_active_viewable()
+        if isinstance(viewable, StackView) and row >= 0:
+            self.list_inputs.setCurrentRow(row)
+            menu = QMenu(self)
+            act_a = menu.addAction("Set as Layer A")
+            act_b = menu.addAction("Set as Layer B")
+            chosen = menu.exec(self.list_inputs.mapToGlobal(pos))
+            if chosen == act_a:
+                viewable.index_a = row
+                viewable.current_layer_index = row
+                self._refresh_subpanels()
+                self.view_updated.emit()
+            elif chosen == act_b:
+                viewable.index_b = row
+                viewable.current_layer_index = row
+                self._refresh_subpanels()
+                self.view_updated.emit()
+
+    def eventFilter(self, watched, event) -> bool:
+        """Intercept right-click on list_inputs to show context menu cleanly."""
+        if hasattr(self, "list_inputs") and watched == self.list_inputs.viewport():
+            if event.type() == QEvent.Type.MouseButtonPress:
+                item = self.list_inputs.itemAt(event.pos())
+                if item:
+                    row = self.list_inputs.row(item)
+                    if event.button() == Qt.MouseButton.RightButton and row >= 0:
+                        self.list_inputs.setCurrentRow(row)
+                        self._on_inputs_context_menu(event.pos())
+                        return True
+        return super().eventFilter(watched, event)
+
     def _on_input_move_up(self) -> None:
         cur_row = self.list_inputs.currentRow()
         if cur_row <= 0:
@@ -1589,6 +1653,7 @@ class SourcesPanelWidget(QWidget):
         viewable = self.graph.get_active_viewable()
         if isinstance(viewable, StackView) and cur_row >= 0:
             viewable.index_a = cur_row
+            viewable.current_layer_index = cur_row
             self._refresh_subpanels()
             self.view_updated.emit()
 
@@ -1597,6 +1662,7 @@ class SourcesPanelWidget(QWidget):
         viewable = self.graph.get_active_viewable()
         if isinstance(viewable, StackView) and cur_row >= 0:
             viewable.index_b = cur_row
+            viewable.current_layer_index = cur_row
             self._refresh_subpanels()
             self.view_updated.emit()
 
@@ -1613,7 +1679,7 @@ class SourcesPanelWidget(QWidget):
         }
         viewable = self.graph.get_active_viewable()
         if isinstance(viewable, StackView):
-            viewable.compare_mode = modes_map.get(mode_text, "wipe")
+            viewable.compare_mode = modes_map.get(mode_text, "switch")
             self.view_updated.emit()
 
     def _on_stack_mix_slider_changed(self, val: int) -> None:
@@ -1624,6 +1690,9 @@ class SourcesPanelWidget(QWidget):
         viewable = self.graph.get_active_viewable()
         if isinstance(viewable, StackView):
             viewable.stack_mix = fval
+            if viewable.compare_mode == "switch" and viewable.current_layer_index != viewable.index_a:
+                viewable.current_layer_index = viewable.index_a
+                self._refresh_subpanels()
             self.view_updated.emit()
 
     def _on_stack_mix_spin_changed(self, fval: float) -> None:
@@ -1633,19 +1702,11 @@ class SourcesPanelWidget(QWidget):
         viewable = self.graph.get_active_viewable()
         if isinstance(viewable, StackView):
             viewable.stack_mix = fval
+            if viewable.compare_mode == "switch" and viewable.current_layer_index != viewable.index_a:
+                viewable.current_layer_index = viewable.index_a
+                self._refresh_subpanels()
             self.view_updated.emit()
 
-    def _on_stack_channels_changed(self) -> None:
-        ch = (
-            self.chk_layer_a_r.isChecked(),
-            self.chk_layer_a_g.isChecked(),
-            self.chk_layer_a_b.isChecked(),
-            self.chk_layer_a_a.isChecked(),
-        )
-        viewable = self.graph.get_active_viewable()
-        if isinstance(viewable, StackView):
-            viewable.channels_a = ch
-            self.view_updated.emit()
 
     def _get_target_source(self) -> Optional[SourceItem]:
         selected_nodes = self._get_selected_nodes()
@@ -1830,6 +1891,7 @@ class SourcesDockWidget(QDockWidget):
         super().__init__("Sources & Session Manager", parent)
         self.setObjectName("SourcesDockWidget")
         self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self.setTitleBarWidget(TabbedDockTitleBar(self))
         self.panel = SourcesPanelWidget(graph, self)
         self.setWidget(self.panel)
 

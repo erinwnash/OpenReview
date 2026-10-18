@@ -179,3 +179,10 @@ def get_docs_dir() -> Path:
         if docs_dir.exists():
             return docs_dir
     return PROJECT_ROOT / "docs" / "html"
+
+
+def get_licenses() -> list[dict]:
+    """Return the license registry for OpenReview and its third-party components."""
+    from openreview.resources.licenses import get_license_registry
+    return get_license_registry()
+

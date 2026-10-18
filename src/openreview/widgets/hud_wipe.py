@@ -234,7 +234,13 @@ class WipeComparisonHUD(QWidget):
         self.btn_horiz.blockSignals(False)
 
     def _on_pos_changed(self, value: int) -> None:
-        self.state.wipe_position = value / 100.0
+        pos = value / 100.0
+        self.state.wipe_position = pos
+        angle_rad = math.radians(float(self.state.wipe_angle_deg))
+        self.state.wipe_center = (
+            max(0.0, min(1.0, 0.5 + (pos - 0.5) * math.cos(angle_rad))),
+            max(0.0, min(1.0, 0.5 + (pos - 0.5) * math.sin(angle_rad))),
+        )
         self.pos_val_label.setText(f"{value}%")
         self.comparison_changed.emit(self.state)
 
