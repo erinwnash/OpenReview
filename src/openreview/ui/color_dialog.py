@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
 )
 
+from openreview.widgets.draggable_scroll_area import BlenderScrollArea
+
 from openreview.color.lut_manager import ColorGradeSettings
 
 
@@ -241,7 +243,7 @@ class ColorAdjustmentsWidget(QWidget):
         main_layout.setSpacing(6)
 
         # Scroll Area for all adjustment controls
-        scroll = QScrollArea(self)
+        scroll = BlenderScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         content_w = QWidget(scroll)

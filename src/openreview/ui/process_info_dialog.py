@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
+from openreview.widgets.draggable_scroll_area import BlenderScrollArea
+
 
 class ProcessInfoDialog(QDialog):
     """Studio Process Info & Playback Performance Diagnostics."""
@@ -96,7 +98,7 @@ class ProcessInfoDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
 
-        scroll = QScrollArea(self)
+        scroll = BlenderScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         content_w = QWidget(scroll)

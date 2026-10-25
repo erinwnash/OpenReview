@@ -32,6 +32,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
+from openreview.widgets.draggable_scroll_area import BlenderScrollArea
+
 from openreview.core.clock import PlaybackClock
 from openreview.core.exporter import MediaExporter
 
@@ -80,6 +82,8 @@ class ExportWorker(QThread):
 
             def _frame_provider(frame_num: int) -> np.ndarray:
                 raw = self.raw_frame_reader(frame_num)
+                if isinstance(raw, (tuple, list)):
+                    raw = next((x for x in raw if isinstance(x, np.ndarray)), None)
                 if raw is None:
                     raw = np.zeros((1080, 1920, 3), dtype=np.uint8)
 
@@ -261,7 +265,7 @@ class ExportDialog(QDialog):
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(10)
 
-        scroll_area = QScrollArea()
+        scroll_area = BlenderScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
 

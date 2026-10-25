@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import math
 from typing import Optional, Set
-from PySide6.QtCore import Qt, QRectF, QPointF, QPoint, Signal, QTimer
-from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPolygonF, QPixmap, QPainterPath
+from PySide6.QtCore import Qt, QRectF, QPointF, QPoint, Signal, QTimer, QEvent
+from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPolygonF, QPixmap, QPainterPath, QLinearGradient, QCursor
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -23,6 +23,9 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QComboBox,
     QFrame,
+    QMenu,
+    QLineEdit,
+    QMessageBox,
 )
 from openreview.core.clock import PlaybackClock
 from openreview.models.annotations import AnnotationStore
@@ -114,6 +117,107 @@ class TimelineRuler(QWidget):
         self.annotation_store.annotations_changed.connect(lambda _: self._invalidate_bg_cache())
         self._invalidate_bg_cache()
 
+    def _clear_annotations_with_confirm(self) -> None:
+        parent_tl = self.parent()
+        while parent_tl and not isinstance(parent_tl, TimelineWidget):
+            parent_tl = parent_tl.parent()
+        if parent_tl and hasattr(parent_tl, "request_clear_all_annotations"):
+            parent_tl.request_clear_all_annotations()
+            return
+
+        ret = QMessageBox.question(
+            self,
+            "Clear All Annotations",
+            "Are you sure you want to clear all drawing annotations and notes across all frames?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret == QMessageBox.StandardButton.Yes:
+            if self.annotation_store:
+                self.annotation_store.clear_all()
+            self._invalidate_bg_cache()
+            self.update()
+
+    def create_context_menu(self) -> QMenu:
+        """Create and populate the timeline right-click context menu."""
+        parent_tl = self.parent()
+        while parent_tl and not isinstance(parent_tl, TimelineWidget):
+            parent_tl = parent_tl.parent()
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #1e1e22;
+                border: 1px solid #3a3a42;
+                color: #dddddd;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 5px 22px 5px 20px;
+                border-radius: 2px;
+            }
+            QMenu::item:selected {
+                background-color: #383842;
+                color: #ffffff;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: #333338;
+                margin: 4px 6px;
+            }
+        """)
+
+        # 1. Toggle Timeline Magnifier (Shift+T)
+        action_mag = menu.addAction("Toggle Timeline Magnifier\tShift+T")
+        if parent_tl:
+            action_mag.triggered.connect(parent_tl.toggle_magnifier_widget)
+
+        menu.addSeparator()
+
+        # 3. Mark In ([)
+        action_in = menu.addAction("Mark In\t[")
+        action_in.triggered.connect(lambda: (self.clock.set_in_mark(self.clock.current_frame), self.update()))
+
+        # 4. Mark Out (])
+        action_out = menu.addAction("Mark Out\t]")
+        action_out.triggered.connect(lambda: (self.clock.set_out_mark(self.clock.current_frame), self.update()))
+
+        # 5. Mark Sequence Boundaries
+        action_bounds = menu.addAction("Mark Sequence Boundaries")
+        action_bounds.triggered.connect(lambda: (self.clock.mark_sequence_boundaries(), self.update()))
+
+        # 6. Clear In and Out (\)
+        action_clear_io = menu.addAction("Clear In and Out\t\\")
+        action_clear_io.triggered.connect(lambda: (self.clock.clear_in_out(), self.update()))
+
+        menu.addSeparator()
+
+        # 7. Toggle Bookmark (M)
+        has_bm = self.clock.current_frame in self.clock.bookmarks
+        action_bm = menu.addAction("Remove Bookmark\tM" if has_bm else "Toggle Bookmark\tM")
+        action_bm.triggered.connect(lambda: (self.clock.toggle_bookmark(self.clock.current_frame), self.update()))
+
+        menu.addSeparator()
+
+        # 8. Clear Cache
+        action_clear_cache = menu.addAction("Clear Cache")
+        if parent_tl and hasattr(parent_tl, "clear_cache_requested"):
+            action_clear_cache.triggered.connect(parent_tl.clear_cache_requested.emit)
+
+        # 9. Clear All Annotations
+        action_clear_ann = menu.addAction("Clear All Annotations...")
+        if parent_tl and hasattr(parent_tl, "request_clear_all_annotations"):
+            action_clear_ann.triggered.connect(parent_tl.request_clear_all_annotations)
+        else:
+            action_clear_ann.triggered.connect(self._clear_annotations_with_confirm)
+
+        return menu
+
+    def contextMenuEvent(self, event) -> None:
+        menu = self.create_context_menu()
+        self._last_context_menu = menu
+        menu.exec(event.globalPos())
+
     def _get_visible_range(self) -> tuple[float, float]:
         start = float(self.clock.start_frame)
         end = float(self.clock.end_frame)
@@ -148,10 +252,12 @@ class TimelineRuler(QWidget):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             x = event.position().x()
+            y = event.position().y()
             self._drag_start_x = x
             self._drag_start_in = self.clock.in_frame
             self._drag_start_out = self.clock.out_frame
 
+            # Ruler lane interactions
             in_x = self._frame_to_x(self.clock.in_frame)
             out_x = self._frame_to_x(self.clock.out_frame)
 
@@ -198,8 +304,9 @@ class TimelineRuler(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         x = event.position().x()
+        y = event.position().y()
 
-        # Update cursor on hover
+        # Update cursor on hover when not dragging
         if self._drag_mode is None:
             in_x = self._frame_to_x(self.clock.in_frame)
             out_x = self._frame_to_x(self.clock.out_frame)
@@ -239,6 +346,7 @@ class TimelineRuler(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_mode = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.update()
 
     # --------------------------------------------------------------------------
     # Painting
@@ -256,25 +364,27 @@ class TimelineRuler(QWidget):
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
-            # Background
             p.fillRect(0, 0, w, h, QColor(22, 22, 22))
+            p.setPen(QPen(QColor(51, 51, 51), 1))
+            p.drawLine(QPointF(0, 0), QPointF(w, 0))
 
-            # In/Out shaded active range
+            # In/Out shaded active range in ruler lane
             in_x = self._frame_to_x(self.clock.in_frame)
             out_x = self._frame_to_x(self.clock.out_frame)
             p.fillRect(QRectF(in_x, 0, max(1.0, out_x - in_x), h), QColor(36, 36, 36, 180))
 
             # In / Out Bracket Handles (Warm amber with grab handles)
             p.setPen(QPen(QColor(229, 168, 35), 2))
-            p.drawLine(QPointF(in_x, 3), QPointF(in_x, h - 3))
-            p.drawLine(QPointF(in_x, 3), QPointF(in_x + 5, 3))
+            top_bracket_y = 3.0
+            p.drawLine(QPointF(in_x, top_bracket_y), QPointF(in_x, h - 3))
+            p.drawLine(QPointF(in_x, top_bracket_y), QPointF(in_x + 5, top_bracket_y))
             p.drawLine(QPointF(in_x, h - 3), QPointF(in_x + 5, h - 3))
 
-            p.drawLine(QPointF(out_x, 3), QPointF(out_x, h - 3))
-            p.drawLine(QPointF(out_x, 3), QPointF(out_x - 5, 3))
+            p.drawLine(QPointF(out_x, top_bracket_y), QPointF(out_x, h - 3))
+            p.drawLine(QPointF(out_x, top_bracket_y), QPointF(out_x - 5, top_bracket_y))
             p.drawLine(QPointF(out_x, h - 3), QPointF(out_x - 5, h - 3))
 
-            # Traditional Ruler / 3ds Max style tick marks for all in-between frames
+            # Traditional Ruler tick marks for all in-between frames
             start = self.clock.start_frame
             end = self.clock.end_frame
             span = max(1, end - start)
@@ -308,14 +418,15 @@ class TimelineRuler(QWidget):
 
                 if is_major:
                     # Major tick mark with crisp frame readout
-                    p.setPen(QPen(QColor(130, 130, 130), 1.2))
+                    p.setPen(QPen(QColor(135, 135, 140), 1.2))
                     p.drawLine(QPointF(x, h - 14), QPointF(x, h - 2))
                     if f % num_step == 0:
-                        p.setPen(QColor(185, 185, 185))
-                        p.drawText(QRectF(x - 24, 2, 48, 12), Qt.AlignmentFlag.AlignCenter, str(f))
+                        p.setPen(QColor(180, 180, 185))
+                        text_y = 2.0
+                        p.drawText(QRectF(x - 24, text_y, 48, 12), Qt.AlignmentFlag.AlignCenter, str(f))
                 elif is_medium:
                     # Medium 5-frame tick
-                    p.setPen(QPen(QColor(85, 85, 85), 1.0))
+                    p.setPen(QPen(QColor(80, 80, 85), 1.0))
                     p.drawLine(QPointF(x, h - 8), QPointF(x, h - 2))
                 elif px_per_frame >= 1.8:
                     # Minor 1-frame tick for all inbetween frames
@@ -323,6 +434,7 @@ class TimelineRuler(QWidget):
                     p.drawLine(QPointF(x, h - 4), QPointF(x, h - 2))
 
             # Clickable Amber Keyframe Diamonds (Annotation Marker Flags)
+            diamond_top = 2.0
             if self.annotation_store:
                 p.setPen(QPen(QColor(20, 20, 20), 1))
                 p.setBrush(QColor(229, 168, 35))  # 3DE amber diamond
@@ -330,10 +442,10 @@ class TimelineRuler(QWidget):
                     if start <= mf <= end:
                         mx = self._frame_to_x(mf)
                         diamond = QPolygonF([
-                            QPointF(mx, 2.0),
-                            QPointF(mx + 4.0, 7.0),
-                            QPointF(mx, 12.0),
-                            QPointF(mx - 4.0, 7.0),
+                            QPointF(mx, diamond_top),
+                            QPointF(mx + 3.5, diamond_top + 4.0),
+                            QPointF(mx, diamond_top + 10.0),
+                            QPointF(mx - 3.5, diamond_top + 4.0),
                         ])
                         p.drawPolygon(diamond)
 
@@ -344,13 +456,12 @@ class TimelineRuler(QWidget):
                 if start <= bf <= end:
                     bx = self._frame_to_x(bf)
                     diamond = QPolygonF([
-                        QPointF(bx, 2.0),
-                        QPointF(bx + 4.0, 7.0),
-                        QPointF(bx, 12.0),
-                        QPointF(bx - 4.0, 7.0),
+                        QPointF(bx, diamond_top),
+                        QPointF(bx + 3.5, diamond_top + 4.0),
+                        QPointF(bx, diamond_top + 10.0),
+                        QPointF(bx - 3.5, diamond_top + 4.0),
                     ])
                     p.drawPolygon(diamond)
-                    p.drawLine(int(bx), 12, int(bx), 16)
 
             # Dual-Color Cached Frames Indicator
             # 1. Temp Drive Disk Frames (Amber/Orange: #e67e22)
@@ -408,21 +519,22 @@ class TimelineRuler(QWidget):
                         p.fillRect(QRectF(x1, h - 5, max(fw, x2 - x1), 3), QColor(46, 204, 113, 230))
 
             # Bottom baseline
-            p.setPen(QPen(QColor(45, 45, 45), 1))
+            p.setPen(QPen(QColor(42, 42, 45), 1))
             p.drawLine(0, h - 1, w, h - 1)
             p.end()
 
         # Blit cached background
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         painter.drawPixmap(0, 0, self._bg_cache)
 
-        # Current Playhead (High-contrast 3DE Amber indicator)
         curr_x = self._frame_to_x(self.clock.current_frame)
+
+        # Classic 3DE Amber indicator line and top triangle handle
         painter.setPen(QPen(QColor(229, 168, 35), 2))
         painter.drawLine(int(curr_x), 0, int(curr_x), h)
 
-        # Playhead handle triangle at top
         poly = [
             QPointF(curr_x - 5, 0),
             QPointF(curr_x + 5, 0),
@@ -684,6 +796,8 @@ class TimelineWidget(QFrame):
     seek_requested = Signal(int)
     audio_clicked = Signal()
     focus_viewport_requested = Signal()
+    clear_cache_requested = Signal()
+    clear_annotations_requested = Signal()
 
     def __init__(
         self,
@@ -710,6 +824,10 @@ class TimelineWidget(QFrame):
     def _setup_ui(self) -> None:
         from openreview.ui.theme import get_spinbox_arrow_stylesheet
         self.setStyleSheet("""
+            TimelineWidget {
+                background-color: #1a1a1a;
+                border-top: 1px solid #333333;
+            }
             QFrame {
                 background-color: #1a1a1a;
                 border-top: 1px solid #333333;
@@ -805,6 +923,9 @@ class TimelineWidget(QFrame):
         self.fps_spin.setValue(int(self.clock.fps))
         self.fps_spin.setSuffix(" fps")
         self.fps_spin.setKeyboardTracking(False)
+        self.fps_spin.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.fps_spin.editingFinished.connect(self.fps_spin.clearFocus)
+        self.fps_spin.wheelEvent = lambda event: event.ignore()
         self.fps_spin.valueChanged.connect(lambda v: self.clock.set_fps(float(v)))
         transport_row.addWidget(self.fps_spin)
 
@@ -814,6 +935,7 @@ class TimelineWidget(QFrame):
         transport_row.addWidget(handles_lbl)
 
         self.combo_handles = QComboBox(self)
+        self.combo_handles.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.combo_handles.setEditable(True)
         self.combo_handles.addItems(["8", "10", "16", "24"])
         self.combo_handles.setToolTip("Set In/Out points based on handle value (inward from sequence bounds)")
@@ -1195,3 +1317,23 @@ class TimelineWidget(QFrame):
     def reset_zoom(self) -> None:
         """Reset timeline ruler magnification."""
         self.ruler.reset_zoom()
+
+    def request_clear_all_annotations(self) -> None:
+        """Prompt confirmation and clear all annotations."""
+        ret = QMessageBox.question(
+            self,
+            "Clear All Annotations",
+            "Are you sure you want to clear all drawing annotations and notes across all frames?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret == QMessageBox.StandardButton.Yes:
+            if self.annotation_store:
+                self.annotation_store.clear_all()
+            self.ruler._invalidate_bg_cache()
+            self.ruler.update()
+            self.clear_annotations_requested.emit()
+
+    def contextMenuEvent(self, event) -> None:
+        """Delegate right-click context menu event on the timeline frame to ruler context menu."""
+        self.ruler.contextMenuEvent(event)

@@ -51,7 +51,38 @@ def extract_media_metadata(file_path: Optional[str]) -> Dict[str, Any]:
     Extract comprehensive metadata dictionary for given media file or container.
     Returns normalized dictionary with metadata fields.
     """
-    if not file_path or not os.path.exists(file_path):
+    actual_path = file_path
+    if file_path and not os.path.exists(file_path):
+        try:
+            parent_dir = os.path.dirname(file_path)
+            basename = os.path.basename(file_path)
+            if parent_dir and os.path.isdir(parent_dir):
+                import re
+                p = re.sub(r"#+", lambda _: r"\d+", basename)
+                p = re.sub(r"%0?\d*d", lambda _: r"\d+", p)
+                rx = re.compile(f"^{p}$", re.IGNORECASE)
+                for f in os.listdir(parent_dir):
+                    if rx.match(f):
+                        candidate = os.path.join(parent_dir, f)
+                        if os.path.isfile(candidate):
+                            actual_path = candidate
+                            break
+        except Exception:
+            pass
+
+        if not actual_path or not os.path.exists(actual_path):
+            try:
+                from openreview.core.sequence_parser import detect_image_sequence
+                seq_info = detect_image_sequence(file_path)
+                if seq_info and hasattr(seq_info, "frame_path"):
+                    first_f = seq_info.available_frames[0] if seq_info.available_frames else seq_info.start_frame
+                    fp = seq_info.frame_path(first_f)
+                    if fp and os.path.exists(fp):
+                        actual_path = fp
+            except Exception:
+                pass
+
+    if not actual_path or not os.path.exists(actual_path):
         return {
             "file_path": file_path or "No Media Loaded",
             "file_name": os.path.basename(file_path) if file_path else "Synthetic Stream",
@@ -61,14 +92,15 @@ def extract_media_metadata(file_path: Optional[str]) -> Dict[str, Any]:
 
     meta: Dict[str, Any] = {
         "file_path": file_path,
+        "resolved_file_path": actual_path,
         "file_name": os.path.basename(file_path),
         "file_dir": os.path.dirname(file_path),
-        "extension": os.path.splitext(file_path)[1].lower(),
+        "extension": os.path.splitext(actual_path)[1].lower(),
     }
 
     # 1. File System Attributes
     try:
-        st = os.stat(file_path)
+        st = os.stat(actual_path)
         meta["file_size_bytes"] = st.st_size
         meta["file_size_mb"] = st.st_size / (1024.0 * 1024.0)
         if meta["file_size_mb"] >= 1024.0:
@@ -92,7 +124,7 @@ def extract_media_metadata(file_path: Optional[str]) -> Dict[str, Any]:
                 "-print_format", "json",
                 "-show_format",
                 "-show_streams",
-                file_path,
+                actual_path,
             ]
             res = subprocess.run(
                 cmd,
@@ -154,9 +186,9 @@ def extract_media_metadata(file_path: Optional[str]) -> Dict[str, Any]:
     from openreview.core.video_reader import is_video_file, get_video_codec_info
     from openreview.core.image_io import is_image_file
 
-    if not ffprobe_success and HAS_CV2 and is_video_file(file_path):
+    if not ffprobe_success and HAS_CV2 and is_video_file(actual_path):
         try:
-            cap = cv2.VideoCapture(file_path)
+            cap = cv2.VideoCapture(actual_path)
             if cap.isOpened():
                 if "width" not in meta or not meta["width"]:
                     meta["width"] = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -181,18 +213,93 @@ def extract_media_metadata(file_path: Optional[str]) -> Dict[str, Any]:
             pass
 
     # 4. Pillow Metadata for Still Images and Image Sequences
-    if HAS_PIL and is_image_file(file_path):
+    if HAS_PIL and is_image_file(actual_path):
         try:
-            with Image.open(file_path) as img:
+            with Image.open(actual_path) as img:
                 meta["image_format"] = img.format or meta["extension"][1:].upper()
                 meta["image_mode"] = img.mode
                 if "width" not in meta or not meta["width"]:
                     meta["width"], meta["height"] = img.size
                 if hasattr(img, "info") and img.info:
                     meta["image_info_tags"] = {
-                        str(k): str(v) for k, v in img.info.items() if len(str(v)) < 120
+                        str(k): str(v) for k, v in img.info.items() if len(str(v)) < 500 and k != "exif"
                     }
+                if hasattr(img, "_getexif") and callable(img._getexif):
+                    try:
+                        raw_exif = img._getexif()
+                        if raw_exif:
+                            from PIL.ExifTags import TAGS
+                            exif_tags = {}
+                            for ek, ev in raw_exif.items():
+                                tag_name = TAGS.get(ek, str(ek))
+                                if len(str(ev)) < 500:
+                                    exif_tags[tag_name] = str(ev)
+                            meta["exif_tags"] = exif_tags
+                    except Exception:
+                        pass
         except Exception:
             pass
 
+    # 5. OpenEXR Header Metadata & Attributes
+    ext = meta.get("extension", "")
+    if ext == ".exr" or (actual_path and str(actual_path).lower().endswith(".exr")):
+        try:
+            from openreview.core.exr_contact_sheet import extract_exr_detailed_metadata
+            exr_data = extract_exr_detailed_metadata(actual_path)
+            if exr_data:
+                meta["exr_details"] = exr_data
+                if exr_data.get("display_window"):
+                    disp = exr_data["display_window"]
+                    meta["width"] = int(disp[2] - disp[0] + 1)
+                    meta["height"] = int(disp[3] - disp[1] + 1)
+                if exr_data.get("pixel_aspect"):
+                    meta["pixel_aspect"] = float(exr_data["pixel_aspect"])
+                if exr_data.get("compression") and exr_data["compression"] != "Unknown":
+                    meta["video_codec"] = f"EXR ({exr_data['compression']})"
+                    meta["video_codec_short"] = str(exr_data["compression"])
+        except Exception as e:
+            meta["exr_error"] = str(e)
+
+    # 6. Aggregate unified metadata tags
+    all_tags = {}
+    if "exr_details" in meta and meta["exr_details"]:
+        ed = meta["exr_details"]
+        if ed.get("data_window"):
+            dw = ed["data_window"]
+            all_tags["exr:dataWindow"] = f"[{dw[0]}, {dw[1]}] -> [{dw[2]}, {dw[3]}] ({dw[2] - dw[0] + 1}x{dw[3] - dw[1] + 1})"
+        if ed.get("display_window"):
+            disp = ed["display_window"]
+            all_tags["exr:displayWindow"] = f"[{disp[0]}, {disp[1]}] -> [{disp[2]}, {disp[3]}] ({disp[2] - disp[0] + 1}x{disp[3] - disp[1] + 1})"
+        if ed.get("compression"):
+            all_tags["exr:compression"] = str(ed["compression"])
+        if ed.get("line_order"):
+            all_tags["exr:lineOrder"] = str(ed["line_order"])
+        if ed.get("pixel_aspect"):
+            all_tags["exr:pixelAspectRatio"] = f"{ed['pixel_aspect']:.4f}"
+        if ed.get("channels"):
+            all_tags["exr:channels"] = f"{len(ed['channels'])} channels ({', '.join(c['name'] for c in ed['channels'][:10])}{'...' if len(ed['channels']) > 10 else ''})"
+        if ed.get("layers"):
+            all_tags["exr:layers"] = ", ".join(ed["layers"])
+        if ed.get("cryptomatte_layers"):
+            all_tags["exr:cryptomatte_layers"] = ", ".join(ed["cryptomatte_layers"])
+        for ak, av in ed.get("attributes", {}).items():
+            all_tags[ak] = str(av)
+
+    if meta.get("format_tags"):
+        for fk, fv in meta["format_tags"].items():
+            all_tags[f"format:{fk}"] = str(fv)
+
+    if meta.get("stream_tags"):
+        for sk, sv in meta["stream_tags"].items():
+            all_tags[f"stream:{sk}"] = str(sv)
+
+    if meta.get("image_info_tags"):
+        for ik, iv in meta["image_info_tags"].items():
+            all_tags[ik] = str(iv)
+
+    if meta.get("exif_tags"):
+        for ek, ev in meta["exif_tags"].items():
+            all_tags[f"exif:{ek}"] = str(ev)
+
+    meta["all_metadata_tags"] = all_tags
     return meta

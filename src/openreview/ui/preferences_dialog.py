@@ -8,8 +8,9 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+from dataclasses import asdict
 from typing import Optional, Dict
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeyEvent, QKeySequence, QColor
 from PySide6.QtWidgets import (
     QDialog,
@@ -30,7 +31,13 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QMessageBox,
+    QScrollArea,
+    QSlider,
+    QColorDialog,
+    QFileDialog,
 )
+
+from openreview.widgets.draggable_scroll_area import BlenderScrollArea
 
 from openreview.core.preferences import PreferencesManager, UserPreferences
 from openreview.core.shortcuts import ShortcutManager, ShortcutAction
@@ -145,6 +152,8 @@ class KeyRecorderDialog(QDialog):
 class PreferencesDialog(QDialog):
     """Studio preferences configuration dialog with comprehensive shortcut customization."""
 
+    hud_opacity_changed = Signal(float)
+
     def __init__(self, mgr: Optional[PreferencesManager] = None, parent: Optional[QWidget] = None):
         if isinstance(mgr, QWidget) and parent is None:
             parent = mgr
@@ -163,6 +172,14 @@ class PreferencesDialog(QDialog):
 
         self._setup_ui()
         self._load_from_prefs(self._current_prefs)
+
+    def _wrap_tab_in_scroll(self, widget: QWidget) -> BlenderScrollArea:
+        scroll = BlenderScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        scroll.setWidget(widget)
+        return scroll
 
     def _setup_ui(self) -> None:
         self.setStyleSheet("""
@@ -277,6 +294,27 @@ class PreferencesDialog(QDialog):
         grp_layout.addWidget(self.chk_auto_retime)
         gen_layout.addWidget(grp_startup)
 
+        # Floating HUD & Overlay Appearance
+        grp_hud = QGroupBox("Floating HUD & Canvas Overlay Appearance")
+        hud_layout = QVBoxLayout(grp_hud)
+        hud_layout.setSpacing(6)
+
+        hud_row = QHBoxLayout()
+        lbl_hud_op = QLabel("Floating HUD Opacity:")
+        self.slider_hud_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.slider_hud_opacity.setRange(30, 100)
+        self.slider_hud_opacity.setValue(85)
+        self.slider_hud_opacity.setSingleStep(5)
+        self.lbl_hud_opacity_val = QLabel("85%")
+        self.lbl_hud_opacity_val.setFixedWidth(40)
+        self.slider_hud_opacity.valueChanged.connect(self._on_hud_opacity_slider_changed)
+
+        hud_row.addWidget(lbl_hud_op)
+        hud_row.addWidget(self.slider_hud_opacity, 1)
+        hud_row.addWidget(self.lbl_hud_opacity_val)
+        hud_layout.addLayout(hud_row)
+        gen_layout.addWidget(grp_hud)
+
         # Playback & GPU Optimization Section
         grp_perf = QGroupBox("Playback Smoothness & Hardware Optimization")
         perf_form = QFormLayout(grp_perf)
@@ -329,7 +367,7 @@ class PreferencesDialog(QDialog):
 
         gen_layout.addStretch()
 
-        self.tabs.addTab(tab_general, "General & Playback")
+        self.tabs.addTab(self._wrap_tab_in_scroll(tab_general), "General & Playback")
 
         # -------------------------------------------------------------
         # Tab 2: Dedicated GPU Acceleration & Playback Engine
@@ -417,7 +455,7 @@ class PreferencesDialog(QDialog):
         gpu_layout.addWidget(grp_resources)
         gpu_layout.addStretch()
 
-        self.tabs.addTab(tab_gpu, "GPU Acceleration")
+        self.tabs.addTab(self._wrap_tab_in_scroll(tab_gpu), "GPU Acceleration")
 
         # -------------------------------------------------------------
         # Tab 3: Caching Preferences
@@ -489,10 +527,16 @@ class PreferencesDialog(QDialog):
         cache_layout.addLayout(cache_form)
         cache_layout.addStretch()
 
-        self.tabs.addTab(tab_cache, "Caching")
+        self.tabs.addTab(self._wrap_tab_in_scroll(tab_cache), "Caching")
 
         # -------------------------------------------------------------
-        # Tab 3: Dedicated Keyboard Shortcuts Customization
+        # Tab 4: PDF Review Sheets & Layout Customization
+        # -------------------------------------------------------------
+        tab_pdf = self._create_tab_pdf_export()
+        self.tabs.addTab(self._wrap_tab_in_scroll(tab_pdf), "PDF Review Sheets")
+
+        # -------------------------------------------------------------
+        # Tab 5: Dedicated Keyboard Shortcuts Customization
         # -------------------------------------------------------------
         tab_shortcuts = QWidget()
         sc_layout = QVBoxLayout(tab_shortcuts)
@@ -554,7 +598,7 @@ class PreferencesDialog(QDialog):
 
         sc_layout.addLayout(sc_btn_row)
 
-        self.tabs.addTab(tab_shortcuts, "Keyboard Shortcuts")
+        self.tabs.addTab(self._wrap_tab_in_scroll(tab_shortcuts), "Keyboard Shortcuts")
 
         layout.addWidget(self.tabs)
 
@@ -683,6 +727,170 @@ class PreferencesDialog(QDialog):
                 self._working_shortcuts[act.action_id] = act.default_shortcut
             self._refresh_shortcuts_table()
 
+    def _create_tab_pdf_export(self) -> QWidget:
+        tab_pdf = QWidget()
+        pdf_layout = QVBoxLayout(tab_pdf)
+        pdf_layout.setContentsMargins(12, 12, 12, 12)
+        pdf_layout.setSpacing(12)
+
+        # 1. Branding & Header Information
+        grp_brand = QGroupBox("Branding & Header Information")
+        brand_form = QFormLayout(grp_brand)
+        brand_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.edit_pdf_title = QLineEdit()
+        self.edit_pdf_title.setPlaceholderText("OpenReview - VFX Review Sheet")
+        self.edit_pdf_title.setToolTip("Main document header title printed at the top of the PDF")
+        brand_form.addRow("Document Title:", self.edit_pdf_title)
+
+        self.edit_pdf_studio = QLineEdit()
+        self.edit_pdf_studio.setPlaceholderText("e.g. Industrial Light & Magic, Studio Main, Dailies Lab")
+        self.edit_pdf_studio.setToolTip("Studio / Facility branding name printed below the document title")
+        brand_form.addRow("Studio / Facility:", self.edit_pdf_studio)
+
+        self.edit_pdf_author = QLineEdit()
+        self.edit_pdf_author.setPlaceholderText("e.g. VFX Supervisor, Lead Artist, Reviewer Name")
+        self.edit_pdf_author.setToolTip("Reviewer or author attribution name")
+        brand_form.addRow("Reviewer / Artist:", self.edit_pdf_author)
+
+        logo_row = QHBoxLayout()
+        self.edit_pdf_logo = QLineEdit()
+        self.edit_pdf_logo.setPlaceholderText("Optional path to company logo image (.png, .jpg, .svg)")
+        logo_row.addWidget(self.edit_pdf_logo, 1)
+
+        self.btn_browse_pdf_logo = QPushButton("Browse...")
+        self.btn_browse_pdf_logo.clicked.connect(self._on_browse_pdf_logo)
+        logo_row.addWidget(self.btn_browse_pdf_logo)
+
+        self.btn_clear_pdf_logo = QPushButton("Clear")
+        self.btn_clear_pdf_logo.clicked.connect(lambda: self.edit_pdf_logo.clear())
+        logo_row.addWidget(self.btn_clear_pdf_logo)
+        brand_form.addRow("Company Logo:", logo_row)
+
+        color_row = QHBoxLayout()
+        self.edit_pdf_header_color = QLineEdit("#c28a10")
+        self.edit_pdf_header_color.setFixedWidth(80)
+        self.edit_pdf_header_color.textChanged.connect(self._on_pdf_color_text_changed)
+        color_row.addWidget(self.edit_pdf_header_color)
+
+        self.btn_pdf_header_color = QPushButton("Pick Color...")
+        self.btn_pdf_header_color.setFixedWidth(100)
+        self.btn_pdf_header_color.clicked.connect(self._on_pick_pdf_header_color)
+        color_row.addWidget(self.btn_pdf_header_color)
+
+        self.lbl_pdf_color_swatch = QLabel()
+        self.lbl_pdf_color_swatch.setFixedSize(24, 24)
+        self.lbl_pdf_color_swatch.setStyleSheet("background-color: #c28a10; border: 1px solid #555555; border-radius: 3px;")
+        color_row.addWidget(self.lbl_pdf_color_swatch)
+        color_row.addStretch()
+        brand_form.addRow("Header Accent Color:", color_row)
+
+        pdf_layout.addWidget(grp_brand)
+
+        # 2. Header Subtitle Elements
+        grp_sub = QGroupBox("Header Subtitle Elements")
+        sub_layout = QVBoxLayout(grp_sub)
+        sub_layout.setSpacing(6)
+
+        self.chk_pdf_show_date = QCheckBox("Include Generation Timestamp / Date")
+        self.chk_pdf_show_date.setChecked(True)
+        sub_layout.addWidget(self.chk_pdf_show_date)
+
+        self.chk_pdf_show_fps = QCheckBox("Include Media Framerate (FPS)")
+        self.chk_pdf_show_fps.setChecked(True)
+        sub_layout.addWidget(self.chk_pdf_show_fps)
+
+        self.chk_pdf_show_keyframe_count = QCheckBox("Include Annotated Keyframe Count")
+        self.chk_pdf_show_keyframe_count.setChecked(True)
+        sub_layout.addWidget(self.chk_pdf_show_keyframe_count)
+
+        pdf_layout.addWidget(grp_sub)
+
+        # 3. Page Layout & Presentation
+        grp_page = QGroupBox("Page Format & Layout")
+        page_form = QFormLayout(grp_page)
+        page_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.combo_pdf_page_size = QComboBox()
+        self.combo_pdf_page_size.addItem("Letter (US Standard 8.5 x 11 in)", "letter")
+        self.combo_pdf_page_size.addItem("A4 (ISO Standard 210 x 297 mm)", "a4")
+        self.combo_pdf_page_size.addItem("Legal (8.5 x 14 in)", "legal")
+        page_form.addRow("Page Size:", self.combo_pdf_page_size)
+
+        self.combo_pdf_orientation = QComboBox()
+        self.combo_pdf_orientation.addItem("Landscape (Wide - Recommended for 16:9 / Film)", "landscape")
+        self.combo_pdf_orientation.addItem("Portrait (Tall)", "portrait")
+        page_form.addRow("Orientation:", self.combo_pdf_orientation)
+
+        self.combo_pdf_layout_mode = QComboBox()
+        self.combo_pdf_layout_mode.addItem("Detailed Row (Side-by-Side: Thumbnail Left, Notes Right)", "detailed_row")
+        self.combo_pdf_layout_mode.addItem("Dense Grid (Storyboards: 2 Columns with Notes Below)", "dense_grid")
+        page_form.addRow("Card Layout Mode:", self.combo_pdf_layout_mode)
+
+        pdf_layout.addWidget(grp_page)
+
+        # 4. Card Content Elements
+        grp_card = QGroupBox("Review Card Content Elements")
+        card_layout = QVBoxLayout(grp_card)
+        card_layout.setSpacing(6)
+
+        self.chk_pdf_show_frame_num = QCheckBox("Include Frame Number")
+        self.chk_pdf_show_frame_num.setChecked(True)
+        card_layout.addWidget(self.chk_pdf_show_frame_num)
+
+        self.chk_pdf_show_timecode = QCheckBox("Include Timecode (SMPTE)")
+        self.chk_pdf_show_timecode.setChecked(True)
+        card_layout.addWidget(self.chk_pdf_show_timecode)
+
+        self.chk_pdf_show_source_path = QCheckBox("Include Source File Name / Media Path")
+        self.chk_pdf_show_source_path.setChecked(True)
+        card_layout.addWidget(self.chk_pdf_show_source_path)
+
+        self.chk_pdf_show_stroke_count = QCheckBox("Include Vector Markup / Stroke Count")
+        self.chk_pdf_show_stroke_count.setChecked(True)
+        card_layout.addWidget(self.chk_pdf_show_stroke_count)
+
+        self.chk_pdf_show_notes = QCheckBox("Include Review Notes & Comments")
+        self.chk_pdf_show_notes.setChecked(True)
+        card_layout.addWidget(self.chk_pdf_show_notes)
+
+        pdf_layout.addWidget(grp_card)
+        pdf_layout.addStretch()
+
+        return tab_pdf
+
+    def _on_browse_pdf_logo(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Company / Studio Logo Image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.svg);;All Files (*.*)",
+        )
+        if file_path:
+            self.edit_pdf_logo.setText(file_path)
+
+    def _set_pdf_header_color(self, hex_color: str) -> None:
+        hex_color = hex_color.strip() if hex_color else "#c28a10"
+        if not hex_color.startswith("#"):
+            hex_color = "#" + hex_color
+        self.edit_pdf_header_color.setText(hex_color)
+        self.lbl_pdf_color_swatch.setStyleSheet(
+            f"background-color: {hex_color}; border: 1px solid #555555; border-radius: 3px;"
+        )
+
+    def _on_pdf_color_text_changed(self, text: str) -> None:
+        t = text.strip()
+        if QColor.isValidColor(t):
+            self.lbl_pdf_color_swatch.setStyleSheet(
+                f"background-color: {t}; border: 1px solid #555555; border-radius: 3px;"
+            )
+
+    def _on_pick_pdf_header_color(self) -> None:
+        cur_c = QColor(self.edit_pdf_header_color.text().strip() or "#c28a10")
+        picked = QColorDialog.getColor(cur_c, self, "Select Header Accent Color")
+        if picked.isValid():
+            self._set_pdf_header_color(picked.name())
+
     def open_tab(self, tab_name: str) -> None:
         """Switch to tab by title matching (case-insensitive)."""
         target = tab_name.strip().lower()
@@ -783,11 +991,48 @@ class PreferencesDialog(QDialog):
         self.spin_behind_pct.setValue(int(p.lookahead_behind_pct))
         self.chk_enable_disk_cache.setChecked(getattr(p, "enable_disk_cache", True))
         self.spin_disk_cache_gb.setValue(getattr(p, "max_disk_cache_gb", 20.0))
+        op_val = int(getattr(p, "hud_opacity", 0.85) * 100)
+        self.slider_hud_opacity.setValue(op_val)
+        self.lbl_hud_opacity_val.setText(f"{op_val}%")
+
+        # PDF Review Sheet Settings
+        self.edit_pdf_title.setText(getattr(p, "pdf_title", "OpenReview - VFX Review Sheet"))
+        self.edit_pdf_studio.setText(getattr(p, "pdf_studio_name", ""))
+        self.edit_pdf_author.setText(getattr(p, "pdf_author_name", ""))
+        self.edit_pdf_logo.setText(getattr(p, "pdf_logo_path", ""))
+        self._set_pdf_header_color(getattr(p, "pdf_header_color", "#c28a10"))
+
+        self.chk_pdf_show_date.setChecked(getattr(p, "pdf_show_date", True))
+        self.chk_pdf_show_fps.setChecked(getattr(p, "pdf_show_fps", True))
+        self.chk_pdf_show_keyframe_count.setChecked(getattr(p, "pdf_show_keyframe_count", True))
+
+        idx_size = self.combo_pdf_page_size.findData(getattr(p, "pdf_page_size", "letter"))
+        if idx_size >= 0:
+            self.combo_pdf_page_size.setCurrentIndex(idx_size)
+
+        idx_ori = self.combo_pdf_orientation.findData(getattr(p, "pdf_page_orientation", "landscape"))
+        if idx_ori >= 0:
+            self.combo_pdf_orientation.setCurrentIndex(idx_ori)
+
+        idx_lay = self.combo_pdf_layout_mode.findData(getattr(p, "pdf_layout_mode", "detailed_row"))
+        if idx_lay >= 0:
+            self.combo_pdf_layout_mode.setCurrentIndex(idx_lay)
+
+        self.chk_pdf_show_frame_num.setChecked(getattr(p, "pdf_show_frame_num", True))
+        self.chk_pdf_show_timecode.setChecked(getattr(p, "pdf_show_timecode", True))
+        self.chk_pdf_show_source_path.setChecked(getattr(p, "pdf_show_source_path", True))
+        self.chk_pdf_show_stroke_count.setChecked(getattr(p, "pdf_show_stroke_count", True))
+        self.chk_pdf_show_notes.setChecked(getattr(p, "pdf_show_notes", True))
+
         self._update_assoc_status()
 
     def _on_auto_ram_budget_toggled(self, checked: bool) -> None:
         self.spin_lookahead_gb.setEnabled(not checked)
         self.spin_region_gb.setEnabled(not checked)
+
+    def _on_hud_opacity_slider_changed(self, val: int) -> None:
+        self.lbl_hud_opacity_val.setText(f"{val}%")
+        self.hud_opacity_changed.emit(val / 100.0)
 
     def _on_clear_disk_cache_clicked(self) -> None:
         try:
@@ -828,44 +1073,67 @@ class PreferencesDialog(QDialog):
         QMessageBox.information(self, "Associations Removed", "OpenReview file associations have been removed from Windows Explorer.")
 
     def _gather_prefs(self) -> UserPreferences:
-        return UserPreferences(
-            default_fps=self.spin_fps.value(),
-            play_on_startup=self.chk_play_on_startup.isChecked(),
-            start_fullscreen=self.chk_fullscreen.isChecked(),
-            canvas_scrub_enabled=self.chk_canvas_scrub.isChecked(),
-            auto_retime_mismatched_fps=self.chk_auto_retime.isChecked(),
-            default_cache_mode=self.combo_cache_mode.currentData(),
-            auto_ram_budget=self.chk_auto_ram_budget.isChecked(),
-            lookahead_cache_gb=self.spin_lookahead_gb.value(),
-            region_cache_gb=self.spin_region_gb.value(),
-            lookahead_behind_pct=float(self.spin_behind_pct.value()),
-            enable_disk_cache=self.chk_enable_disk_cache.isChecked(),
-            max_disk_cache_gb=self.spin_disk_cache_gb.value(),
-            playback_texture_mode=self.combo_texture_mode.currentData(),
-            prefetch_buffer_size=self.spin_prefetch_buffer.value(),
-            prefetch_worker_threads=self.spin_prefetch_threads.value(),
-            fast_playback_laptop_mode=self.chk_laptop_mode.isChecked(),
-            playback_engine=self.combo_playback_engine.currentData() or "opengl_core",
-            selected_gpu_device=self.combo_gpu_device.currentData() or "auto",
-            hardware_video_decoding=self.chk_hw_video.isChecked(),
-            enable_opencl_acceleration=self.chk_opencl.isChecked(),
-            enable_pbo_streaming=self.chk_pbo_streaming.isChecked(),
-            vsync_enabled=self.chk_vsync.isChecked(),
-            gpu_vram_limit_mb=float(self.spin_gpu_vram.value()),
-            shortcuts=dict(self._working_shortcuts),
-        )
+        # Clone existing preferences so unexposed settings are never erased
+        p = UserPreferences(**asdict(self._current_prefs))
+        p.default_fps = self.spin_fps.value()
+        p.play_on_startup = self.chk_play_on_startup.isChecked()
+        p.start_fullscreen = self.chk_fullscreen.isChecked()
+        p.canvas_scrub_enabled = self.chk_canvas_scrub.isChecked()
+        p.auto_retime_mismatched_fps = self.chk_auto_retime.isChecked()
+        p.default_cache_mode = self.combo_cache_mode.currentData()
+        p.auto_ram_budget = self.chk_auto_ram_budget.isChecked()
+        p.lookahead_cache_gb = self.spin_lookahead_gb.value()
+        p.region_cache_gb = self.spin_region_gb.value()
+        p.lookahead_behind_pct = float(self.spin_behind_pct.value())
+        p.enable_disk_cache = self.chk_enable_disk_cache.isChecked()
+        p.max_disk_cache_gb = self.spin_disk_cache_gb.value()
+        p.playback_texture_mode = self.combo_texture_mode.currentData()
+        p.prefetch_buffer_size = self.spin_prefetch_buffer.value()
+        p.prefetch_worker_threads = self.spin_prefetch_threads.value()
+        p.fast_playback_laptop_mode = self.chk_laptop_mode.isChecked()
+        p.playback_engine = self.combo_playback_engine.currentData() or "opengl_core"
+        p.selected_gpu_device = self.combo_gpu_device.currentData() or "auto"
+        p.hardware_video_decoding = self.chk_hw_video.isChecked()
+        p.enable_opencl_acceleration = self.chk_opencl.isChecked()
+        p.enable_pbo_streaming = self.chk_pbo_streaming.isChecked()
+        p.vsync_enabled = self.chk_vsync.isChecked()
+        p.gpu_vram_limit_mb = float(self.spin_gpu_vram.value())
+        p.hud_opacity = self.slider_hud_opacity.value() / 100.0
+
+        # PDF Review Sheet Settings
+        p.pdf_title = self.edit_pdf_title.text().strip() or "OpenReview - VFX Review Sheet"
+        p.pdf_studio_name = self.edit_pdf_studio.text().strip()
+        p.pdf_author_name = self.edit_pdf_author.text().strip()
+        p.pdf_logo_path = self.edit_pdf_logo.text().strip()
+        p.pdf_header_color = self.edit_pdf_header_color.text().strip() or "#c28a10"
+        p.pdf_show_date = self.chk_pdf_show_date.isChecked()
+        p.pdf_show_fps = self.chk_pdf_show_fps.isChecked()
+        p.pdf_show_keyframe_count = self.chk_pdf_show_keyframe_count.isChecked()
+        p.pdf_page_size = self.combo_pdf_page_size.currentData() or "letter"
+        p.pdf_page_orientation = self.combo_pdf_orientation.currentData() or "landscape"
+        p.pdf_layout_mode = self.combo_pdf_layout_mode.currentData() or "detailed_row"
+        p.pdf_show_frame_num = self.chk_pdf_show_frame_num.isChecked()
+        p.pdf_show_timecode = self.chk_pdf_show_timecode.isChecked()
+        p.pdf_show_source_path = self.chk_pdf_show_source_path.isChecked()
+        p.pdf_show_stroke_count = self.chk_pdf_show_stroke_count.isChecked()
+        p.pdf_show_notes = self.chk_pdf_show_notes.isChecked()
+
+        p.shortcuts = dict(self._working_shortcuts)
+        return p
 
     def _reset_defaults(self) -> None:
         self._load_from_prefs(UserPreferences())
         for act in self.shortcut_mgr.get_actions():
             self._working_shortcuts[act.action_id] = act.default_shortcut
+        self.slider_hud_opacity.setValue(85)
+        self.lbl_hud_opacity_val.setText("85%")
+        self.hud_opacity_changed.emit(0.85)
         self._refresh_shortcuts_table()
 
     def _apply(self) -> None:
         new_prefs = self._gather_prefs()
-        # Apply working shortcuts to ShortcutManager
-        for action_id, key_str in self._working_shortcuts.items():
-            self.shortcut_mgr.set_shortcut(action_id, key_str)
+        # Apply working shortcuts in batch to avoid triggering dozens of synchronous disk & registry writes
+        self.shortcut_mgr.set_shortcuts_batch(self._working_shortcuts, persist=False)
         self.mgr.save(new_prefs)
 
     def _save_and_close(self) -> None:

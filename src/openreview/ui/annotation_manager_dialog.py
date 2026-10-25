@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, List, Callable
 import numpy as np
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread, QEventLoop, QObject
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QDialog,
@@ -36,6 +36,196 @@ from openreview.core.clock import PlaybackClock
 from openreview.core.exporter import MediaExporter
 
 
+class AnnotationExportWorker(QThread):
+    """
+    Background worker thread for exporting PDF review sheets, rendered frame sequences,
+    and burned-in PNG images without freezing the main application UI.
+    """
+    progress_updated = Signal(int, int, str)
+
+    def __init__(
+        self,
+        export_mode: str,  # "pdf", "sequence", "burned_in"
+        target_path: Path,
+        frames: List[int],
+        store: AnnotationStore,
+        fps: float,
+        render_frame_callback: Optional[Callable[[int], np.ndarray]],
+        export_png_frames: bool = False,
+        seq_start_frame: int = 1001,
+        seq_end_frame: int = 1100,
+        source_path: str = "",
+        parent: Optional[QObject] = None,
+    ):
+        super().__init__(parent)
+        self.export_mode = export_mode
+        self.target_path = target_path
+        self.frames = frames
+        self.store = store
+        self.fps = fps
+        self.render_frame_callback = render_frame_callback
+        self.export_png_frames = export_png_frames
+        self.seq_start_frame = seq_start_frame
+        self.seq_end_frame = seq_end_frame
+        self.source_path = source_path
+        self._is_cancelled = False
+        self.result_success = False
+        self.result_title = ""
+        self.result_message = ""
+
+    def cancel(self) -> None:
+        self._is_cancelled = True
+
+    def run(self) -> None:
+        try:
+            if self.export_mode == "pdf":
+                self._run_pdf_export()
+            elif self.export_mode == "sequence":
+                self._run_sequence_export()
+            elif self.export_mode == "burned_in":
+                self._run_burned_in_export()
+        except Exception as e:
+            self.result_success = False
+            self.result_title = "Export Error"
+            self.result_message = f"Failed to export annotations:\n{e}"
+
+    def _run_pdf_export(self) -> None:
+        p = self.target_path
+        if not p.suffix:
+            p = p.with_suffix(".pdf")
+
+        entries = []
+        render_steps = len(self.frames)
+        total_steps = render_steps * 2 + 1
+        png_dir = None
+        saved_png_count = 0
+        if self.export_png_frames:
+            png_dir = p.parent / f"{p.stem}_frames"
+            png_dir.mkdir(parents=True, exist_ok=True)
+
+        for idx, f in enumerate(self.frames):
+            if self._is_cancelled:
+                return
+            self.progress_updated.emit(idx, total_steps, f"Rendering frame {f} ({idx + 1} of {len(self.frames)})...")
+
+            img = self.render_frame_callback(f) if self.render_frame_callback else None
+            if isinstance(img, (tuple, list)):
+                img = next((x for x in img if isinstance(x, np.ndarray)), None)
+
+            if self.export_png_frames and png_dir and img is not None:
+                png_file = png_dir / f"frame_{f:04d}.png"
+                MediaExporter.save_image_file(img, png_file)
+                saved_png_count += 1
+
+            note = self.store.get_frame_note(f)
+            tc = frame_to_timecode(f, self.fps)
+            st_cnt = self.store.get_stroke_count(f)
+            entries.append({
+                "frame": f,
+                "timecode": tc,
+                "note": note,
+                "strokes_count": st_cnt,
+                "image": img,
+                "source_path": self.source_path,
+            })
+
+        if self._is_cancelled:
+            return
+
+        def _on_pdf_progress(cur: int, tot: int, msg: str):
+            if self._is_cancelled:
+                return
+            overall = min(render_steps + cur, total_steps)
+            self.progress_updated.emit(overall, total_steps, msg)
+
+        pdf_path = MediaExporter.export_pdf_review_sheet(
+            output_pdf_path=p,
+            entries=entries,
+            fps=self.fps,
+            progress_callback=_on_pdf_progress,
+        )
+        self.progress_updated.emit(total_steps, total_steps, "Done")
+
+        exported_png_msg = ""
+        if self.export_png_frames and png_dir:
+            exported_png_msg = f"\n\nAlso exported {saved_png_count} annotated PNG frames to:\n{png_dir}"
+
+        self.result_success = True
+        self.result_title = "Export Successful"
+        self.result_message = f"Exported structured PDF review sheet to:\n{pdf_path}{exported_png_msg}"
+
+    def _run_sequence_export(self) -> None:
+        if not self.render_frame_callback:
+            self.result_success = False
+            self.result_title = "Renderer Unavailable"
+            self.result_message = "Direct frame render callback not available."
+            return
+
+        p = self.target_path
+        out_dir = p.parent / (p.stem + "_sequence")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        seq_frames = list(range(self.seq_start_frame, self.seq_end_frame + 1))
+        total = len(seq_frames)
+        count = 0
+
+        for idx, f in enumerate(seq_frames):
+            if self._is_cancelled:
+                return
+            self.progress_updated.emit(idx, total, f"Rendering frame {f} ({idx + 1} of {total})...")
+            img = self.render_frame_callback(f)
+            if isinstance(img, (tuple, list)):
+                img = next((x for x in img if isinstance(x, np.ndarray)), None)
+            out_file = out_dir / f"{p.stem}.{f:04d}.png"
+            MediaExporter.save_image_file(img, out_file)
+            count += 1
+
+        self.progress_updated.emit(total, total, "Done")
+        self.result_success = True
+        self.result_title = "Export Successful"
+        self.result_message = f"Exported {count} frames of annotated sequence to:\n{out_dir}"
+
+    def _run_burned_in_export(self) -> None:
+        if not self.render_frame_callback:
+            self.result_success = False
+            self.result_title = "Renderer Unavailable"
+            self.result_message = "Direct viewport render callback not available."
+            return
+
+        p = self.target_path
+        if len(self.frames) == 1:
+            f = self.frames[0]
+            self.progress_updated.emit(0, 1, f"Rendering frame {f}...")
+            img = self.render_frame_callback(f)
+            if isinstance(img, (tuple, list)):
+                img = next((x for x in img if isinstance(x, np.ndarray)), None)
+            out_file = p if p.suffix.lower() == ".png" else p.with_suffix(".png")
+            MediaExporter.save_image_file(img, out_file)
+            self.progress_updated.emit(1, 1, "Done")
+            self.result_success = True
+            self.result_title = "Export Successful"
+            self.result_message = f"Exported annotated frame {f} to:\n{out_file}"
+        else:
+            out_dir = p.parent / (p.stem + "_frames")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            total = len(self.frames)
+            count = 0
+            for idx, f in enumerate(self.frames):
+                if self._is_cancelled:
+                    return
+                self.progress_updated.emit(idx, total, f"Rendering frame {f} ({idx + 1} of {total})...")
+                img = self.render_frame_callback(f)
+                if isinstance(img, (tuple, list)):
+                    img = next((x for x in img if isinstance(x, np.ndarray)), None)
+                out_file = out_dir / f"annotated.{f:04d}.png"
+                MediaExporter.save_image_file(img, out_file)
+                count += 1
+
+            self.progress_updated.emit(total, total, "Done")
+            self.result_success = True
+            self.result_title = "Export Successful"
+            self.result_message = f"Exported {count} burned-in frames to:\n{out_dir}"
+
+
 class AnnotationManagerWidget(QWidget):
     """
     Studio-grade Annotation & Markup Manager Widget.
@@ -52,7 +242,10 @@ class AnnotationManagerWidget(QWidget):
         clock: PlaybackClock,
         render_frame_callback: Optional[Callable[[int], np.ndarray]] = None,
         parent: Optional[QWidget] = None,
+        source_path: str = "",
     ):
+        if isinstance(parent, str) and not source_path:
+            source_path, parent = parent, None
         super().__init__(parent)
         self.setMinimumSize(480, 360)
         self.setMaximumHeight(520)
@@ -60,6 +253,7 @@ class AnnotationManagerWidget(QWidget):
         self.store = annotation_store
         self.clock = clock
         self.render_frame_callback = render_frame_callback
+        self.source_path = str(source_path) if isinstance(source_path, (str, Path)) else ""
         self._updating_table = False
 
         self._setup_ui()
@@ -446,54 +640,6 @@ class AnnotationManagerWidget(QWidget):
             if "PDF" in selected_filter or p.suffix.lower() == ".pdf":
                 if not p.suffix:
                     p = p.with_suffix(".pdf")
-                entries = []
-                total_steps = len(frames) + 1
-                progress = QProgressDialog("Rendering annotated frames...", "Cancel", 0, total_steps, self)
-                progress.setWindowTitle("Exporting PDF Review Sheet")
-                progress.setWindowModality(Qt.WindowModality.WindowModal)
-                progress.setMinimumDuration(0)
-                progress.setValue(0)
-
-                canceled = False
-                for idx, f in enumerate(frames):
-                    progress.setValue(idx)
-                    progress.setLabelText(f"Rendering frame {f} ({idx + 1} of {len(frames)})...")
-                    QApplication.processEvents()
-                    if progress.wasCanceled():
-                        canceled = True
-                        break
-
-                    img = self.render_frame_callback(f) if self.render_frame_callback else None
-                    note = self.store.get_frame_note(f)
-                    tc = frame_to_timecode(f, self.clock.fps)
-                    st_cnt = self.store.get_stroke_count(f)
-                    entries.append({
-                        "frame": f,
-                        "timecode": tc,
-                        "note": note,
-                        "strokes_count": st_cnt,
-                        "image": img,
-                    })
-
-                if canceled:
-                    progress.close()
-                    QMessageBox.information(self, "Export Cancelled", "Export operation was cancelled.")
-                    return
-
-                progress.setLabelText("Compiling PDF review document...")
-                progress.setValue(len(frames))
-                QApplication.processEvents()
-
-                pdf_path = MediaExporter.export_pdf_review_sheet(
-                    output_pdf_path=p,
-                    entries=entries,
-                    title="OpenReview - VFX Review Sheet",
-                    fps=self.clock.fps,
-                )
-                progress.setValue(total_steps)
-                progress.close()
-
-                # Exclusively ask user if they also want to export individual annotated frames as PNGs
                 reply = QMessageBox.question(
                     self,
                     "Export PNG Frames?",
@@ -501,102 +647,58 @@ class AnnotationManagerWidget(QWidget):
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.Yes,
                 )
-                exported_png_msg = ""
-                if reply == QMessageBox.StandardButton.Yes:
-                    png_dir = p.parent / f"{p.stem}_frames"
-                    png_dir.mkdir(parents=True, exist_ok=True)
-                    saved_count = 0
-                    png_progress = QProgressDialog("Saving PNG frames...", "Cancel", 0, len(entries), self)
-                    png_progress.setWindowTitle("Exporting PNG Frames")
-                    png_progress.setWindowModality(Qt.WindowModality.WindowModal)
-                    png_progress.setMinimumDuration(0)
+                export_png = (reply == QMessageBox.StandardButton.Yes)
+                active_src = self.source_path
+                if not active_src:
+                    win = self.window()
+                    if hasattr(win, "_current_media_path"):
+                        active_src = str(getattr(win, "_current_media_path", ""))
 
-                    for idx, entry in enumerate(entries):
-                        png_progress.setValue(idx)
-                        f = entry["frame"]
-                        png_progress.setLabelText(f"Saving frame_{f:04d}.png ({idx + 1} of {len(entries)})...")
-                        QApplication.processEvents()
-                        if png_progress.wasCanceled():
-                            break
-                        img = entry["image"]
-                        if img is not None:
-                            png_file = png_dir / f"frame_{f:04d}.png"
-                            MediaExporter.save_image_file(img, png_file)
-                            saved_count += 1
-                    png_progress.setValue(len(entries))
-                    png_progress.close()
-                    exported_png_msg = f"\n\nAlso exported {saved_count} annotated PNG frames to:\n{png_dir}"
-
-                QMessageBox.information(
-                    self,
-                    "Export Successful",
-                    f"Exported structured PDF review sheet to:\n{pdf_path}{exported_png_msg}",
+                worker = AnnotationExportWorker(
+                    export_mode="pdf",
+                    target_path=p,
+                    frames=frames,
+                    store=self.store,
+                    fps=self.clock.fps,
+                    render_frame_callback=self.render_frame_callback,
+                    export_png_frames=export_png,
+                    source_path=active_src,
+                    parent=self,
                 )
+                self._run_export_worker(worker, "Exporting PDF Review Sheet", "Rendering annotated frames...", len(frames) + 1)
 
             elif "Sequence" in selected_filter:
-                if self.render_frame_callback:
-                    out_dir = p.parent / (p.stem + "_sequence")
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    seq_frames = list(range(self.clock.start_frame, self.clock.end_frame + 1))
-                    progress = QProgressDialog("Exporting annotated sequence...", "Cancel", 0, len(seq_frames), self)
-                    progress.setWindowTitle("Exporting Image Sequence")
-                    progress.setWindowModality(Qt.WindowModality.WindowModal)
-                    progress.setMinimumDuration(0)
-
-                    count = 0
-                    for idx, f in enumerate(seq_frames):
-                        progress.setValue(idx)
-                        progress.setLabelText(f"Rendering frame {f} ({idx + 1} of {len(seq_frames)})...")
-                        QApplication.processEvents()
-                        if progress.wasCanceled():
-                            break
-                        img = self.render_frame_callback(f)
-                        out_file = out_dir / f"{p.stem}.{f:04d}.png"
-                        MediaExporter.save_image_file(img, out_file)
-                        count += 1
-                    progress.setValue(len(seq_frames))
-                    progress.close()
-                    QMessageBox.information(
-                        self, "Export Successful", f"Exported {count} frames of annotated sequence to:\n{out_dir}"
-                    )
-                else:
+                if not self.render_frame_callback:
                     QMessageBox.warning(self, "Renderer Unavailable", "Direct frame render callback not available.")
+                    return
+                seq_frames_count = max(1, self.clock.end_frame - self.clock.start_frame + 1)
+                worker = AnnotationExportWorker(
+                    export_mode="sequence",
+                    target_path=p,
+                    frames=frames,
+                    store=self.store,
+                    fps=self.clock.fps,
+                    render_frame_callback=self.render_frame_callback,
+                    seq_start_frame=self.clock.start_frame,
+                    seq_end_frame=self.clock.end_frame,
+                    parent=self,
+                )
+                self._run_export_worker(worker, "Exporting Image Sequence", "Rendering sequence frames...", seq_frames_count)
 
             elif "Burned-in" in selected_filter or p.suffix.lower() == ".png":
-                if self.render_frame_callback:
-                    if len(frames) == 1:
-                        img = self.render_frame_callback(frames[0])
-                        out_file = p if p.suffix.lower() == ".png" else p.with_suffix(".png")
-                        MediaExporter.save_image_file(img, out_file)
-                        QMessageBox.information(
-                            self, "Export Successful", f"Exported annotated frame {frames[0]} to:\n{out_file}"
-                        )
-                    else:
-                        out_dir = p.parent / (p.stem + "_frames")
-                        out_dir.mkdir(parents=True, exist_ok=True)
-                        progress = QProgressDialog("Exporting burned-in PNG frames...", "Cancel", 0, len(frames), self)
-                        progress.setWindowTitle("Exporting PNG Frames")
-                        progress.setWindowModality(Qt.WindowModality.WindowModal)
-                        progress.setMinimumDuration(0)
-
-                        count = 0
-                        for idx, f in enumerate(frames):
-                            progress.setValue(idx)
-                            progress.setLabelText(f"Rendering frame {f} ({idx + 1} of {len(frames)})...")
-                            QApplication.processEvents()
-                            if progress.wasCanceled():
-                                break
-                            img = self.render_frame_callback(f)
-                            out_file = out_dir / f"annotated.{f:04d}.png"
-                            MediaExporter.save_image_file(img, out_file)
-                            count += 1
-                        progress.setValue(len(frames))
-                        progress.close()
-                        QMessageBox.information(
-                            self, "Export Successful", f"Exported {count} burned-in frames to:\n{out_dir}"
-                        )
-                else:
+                if not self.render_frame_callback:
                     QMessageBox.warning(self, "Renderer Unavailable", "Direct viewport render callback not available.")
+                    return
+                worker = AnnotationExportWorker(
+                    export_mode="burned_in",
+                    target_path=p,
+                    frames=frames,
+                    store=self.store,
+                    fps=self.clock.fps,
+                    render_frame_callback=self.render_frame_callback,
+                    parent=self,
+                )
+                self._run_export_worker(worker, "Exporting PNG Frames", "Rendering frames...", len(frames))
 
             elif "JSON" in selected_filter or p.suffix.lower() == ".json":
                 self.store.export_to_json(p)
@@ -611,6 +713,54 @@ class AnnotationManagerWidget(QWidget):
                 QMessageBox.information(self, "Export Successful", f"Exported CSV review notes to:\n{p}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export annotations:\n{e}")
+
+    def _run_export_worker(
+        self, worker: AnnotationExportWorker, title: str, initial_msg: str, total_steps: int
+    ) -> None:
+        """Run an export worker asynchronously while pumping Qt events smoothly."""
+        progress = QProgressDialog(initial_msg, "Cancel", 0, total_steps, self)
+        progress.setWindowTitle(title)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        def on_progress(cur: int, tot: int, msg: str):
+            if progress.maximum() != tot:
+                progress.setMaximum(tot)
+            progress.setValue(cur)
+            progress.setLabelText(msg)
+
+        user_cancelled = False
+        def on_user_canceled():
+            nonlocal user_cancelled
+            user_cancelled = True
+            worker.cancel()
+
+        worker.progress_updated.connect(on_progress)
+        progress.canceled.connect(on_user_canceled)
+
+        loop = QEventLoop()
+        worker.finished.connect(loop.quit)
+        worker.start()
+        loop.exec()
+
+        # Disconnect progress canceled so closing the dialog never triggers cancellation
+        try:
+            progress.canceled.disconnect(on_user_canceled)
+        except Exception:
+            pass
+        progress.close()
+
+        # Prioritize explicit errors over cancellation
+        if worker.result_title and not worker.result_success:
+            QMessageBox.critical(self, worker.result_title, worker.result_message)
+        elif user_cancelled:
+            QMessageBox.information(self, "Export Cancelled", "Export operation was cancelled.")
+        elif worker.result_title:
+            if worker.result_success:
+                QMessageBox.information(self, worker.result_title, worker.result_message)
+            else:
+                QMessageBox.critical(self, worker.result_title, worker.result_message)
 
     def _on_import_clicked(self) -> None:
         """Handle importing vector annotations and notes from JSON."""

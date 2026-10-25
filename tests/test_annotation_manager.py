@@ -165,6 +165,7 @@ def test_annotation_manager_export_workflow(qtbot, monkeypatch, tmp_path):
         lambda *args, **kwargs: (str(target_json), "JSON Vector Annotations (*.json)"),
     )
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: pytest.fail(f"Unexpected critical dialog: {args}"))
 
     dlg._on_export_clicked()
     assert target_json.exists()
@@ -238,3 +239,89 @@ def test_main_window_annotation_integration(qtbot, monkeypatch):
     assert len(win.annotation_store.get_annotated_frames()) == 0
 
     win.close()
+
+
+def test_annotation_export_handles_tuple_render_callback(qtbot, tmp_path, monkeypatch):
+    """Test AnnotationManagerDialog handles tuple/multi-buffer return values from render callback without 'tuple' object has no attribute 'dtype' error."""
+    store = AnnotationStore()
+    store.add_stroke(1020, Stroke(shape_type=ShapeType.RECTANGLE, points=[(0.1, 0.1), (0.4, 0.4)]))
+    store.set_frame_note(1020, "Top of the steps pops up")
+    store.add_stroke(1022, Stroke(shape_type=ShapeType.PEN, points=[(0.2, 0.2), (0.5, 0.5)]))
+    store.set_frame_note(1022, "Add contact shadow when touches ...")
+
+    clock = PlaybackClock(start_frame=1001, end_frame=1100, fps=24.0)
+
+    # Callback returning a tuple (da, db) mimicking StackView or comparison mode
+    img_a = np.zeros((120, 160, 4), dtype=np.uint8)
+    img_b = np.full((120, 160, 4), 128, dtype=np.uint8)
+    tuple_render = lambda f: (img_a, img_b)
+
+    dlg = AnnotationManagerDialog(store, clock, render_frame_callback=tuple_render)
+    qtbot.addWidget(dlg)
+
+    # 1. Export Burned-in PNG frames (reproducing the exact condition in the user's screenshot)
+    target_png = tmp_path / "annotated_frame.png"
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(target_png), "Burned-in PNG Frames (*.png)"),
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: pytest.fail(f"Unexpected critical dialog: {args}"))
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: pytest.fail(f"Export Error dialog shown: {args}"))
+
+    dlg._on_export_clicked()
+
+    frames_dir = tmp_path / "annotated_frame_frames"
+    assert frames_dir.exists()
+    assert (frames_dir / "annotated.1020.png").exists()
+    assert (frames_dir / "annotated.1022.png").exists()
+
+    # 2. Export PDF Review Sheet with tuple callback
+    target_pdf = tmp_path / "review_sheet_tuple.pdf"
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(target_pdf), "PDF Review Sheet (*.pdf)"),
+    )
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.No)
+    dlg._on_export_clicked()
+    assert target_pdf.exists()
+
+    dlg.close()
+
+
+def test_media_exporter_tuple_resilience(tmp_path):
+    """Test that MediaExporter methods accept tuples gracefully without raising AttributeError."""
+    from openreview.core.exporter import MediaExporter
+    arr1 = np.zeros((64, 64, 4), dtype=np.float32)
+    arr2 = np.ones((64, 64, 4), dtype=np.float32)
+    tup = (arr1, arr2)
+
+    # 1. apply_screenspace_color_transforms
+    out1 = MediaExporter.apply_screenspace_color_transforms(tup, None)
+    assert isinstance(out1, np.ndarray)
+    assert out1.dtype == np.uint8
+
+    # 2. convert_colorspace
+    out2 = MediaExporter.convert_colorspace(tup, "Current View (WYSIWYG)")
+    assert isinstance(out2, np.ndarray)
+
+    # 3. render_strokes_on_image
+    out3 = MediaExporter.render_strokes_on_image(tup, [])
+    assert isinstance(out3, np.ndarray)
+    assert out3.dtype == np.uint8
+
+    # 4. _to_uint8
+    out4 = MediaExporter._to_uint8(tup)
+    assert isinstance(out4, np.ndarray)
+    assert out4.dtype == np.uint8
+
+    # 5. resize_frame
+    out5 = MediaExporter.resize_frame(tup, 32, 32)
+    assert isinstance(out5, np.ndarray)
+    assert out5.shape[:2] == (32, 32)
+
+    # 6. save_image_file
+    out_file = tmp_path / "test_tup.png"
+    MediaExporter.save_image_file(tup, out_file)
+    assert out_file.exists()
+

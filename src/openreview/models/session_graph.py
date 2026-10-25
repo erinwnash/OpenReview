@@ -705,7 +705,7 @@ class SessionGraph(QObject):
         self.graph_changed.emit()
         return item
 
-    def add_source_from_path(self, path: str, parent_folder_id: Optional[str] = None) -> Optional[SourceItem]:
+    def add_source_from_path(self, path: str, parent_folder_id: Optional[str] = None, auto_activate: bool = True) -> Optional[SourceItem]:
         """Inspect media file or sequence on disk and add to sources bin."""
         if not path or not os.path.exists(path):
             return None
@@ -726,14 +726,14 @@ class SessionGraph(QObject):
         else:
             self.root_source_ids.append(source.id)
 
-        # If no active view, make this first source active
-        if self.active_view_id is None:
+        # If no active view, make this first source active (if auto_activate)
+        if auto_activate and self.active_view_id is None:
             self.set_active_view(ViewType.SOURCE, source.id)
 
         self.graph_changed.emit()
         return source
 
-    def add_sources_batch(self, items: List[SourceItem], parent_folder_id: Optional[str] = None) -> List[SourceItem]:
+    def add_sources_batch(self, items: List[SourceItem], parent_folder_id: Optional[str] = None, auto_activate: bool = True) -> List[SourceItem]:
         """Batch-add multiple pre-built SourceItems with a single graph_changed signal emission."""
         added: List[SourceItem] = []
         for item in items:
@@ -755,7 +755,7 @@ class SessionGraph(QObject):
             else:
                 self.root_source_ids.append(item.id)
 
-            if self.active_view_id is None:
+            if auto_activate and self.active_view_id is None:
                 self.set_active_view(ViewType.SOURCE, item.id)
             added.append(item)
 
@@ -763,13 +763,13 @@ class SessionGraph(QObject):
             self.graph_changed.emit()
         return added
 
-    def add_sources_from_paths(self, paths: List[str], parent_folder_id: Optional[str] = None) -> List[SourceItem]:
+    def add_sources_from_paths(self, paths: List[str], parent_folder_id: Optional[str] = None, auto_activate: bool = True) -> List[SourceItem]:
         items: List[SourceItem] = []
         for p in paths:
             s = build_source_item_from_path(p, parent_folder_id)
             if s:
                 items.append(s)
-        return self.add_sources_batch(items, parent_folder_id)
+        return self.add_sources_batch(items, parent_folder_id, auto_activate=auto_activate)
 
     def create_folder(
         self,

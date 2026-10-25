@@ -377,6 +377,21 @@ class ShortcutManager(QObject):
             self._save_to_preferences()
             self.shortcuts_changed.emit()
 
+    def set_shortcuts_batch(self, shortcuts: Dict[str, str], persist: bool = True) -> None:
+        """Set multiple custom shortcuts in batch, rebuilding keymap and persisting once."""
+        changed = False
+        for action_id, key_str in shortcuts.items():
+            if action_id in self._actions:
+                norm = self.normalize_key_sequence(key_str)
+                if self._actions[action_id].current_shortcut != norm:
+                    self._actions[action_id].current_shortcut = norm
+                    changed = True
+        if changed:
+            self._rebuild_key_map()
+            if persist:
+                self._save_to_preferences()
+            self.shortcuts_changed.emit()
+
     def reset_to_default(self, action_id: str) -> None:
         """Reset a specific action to its default shortcut."""
         if action_id in self._actions:

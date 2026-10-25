@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
+from openreview.widgets.draggable_scroll_area import BlenderScrollArea
+
 
 class _StatSwatchTile(QFrame):
     """Swatch thumbnail preview tile for Min, Max, Average, or Median color values."""
@@ -480,7 +482,7 @@ class ColorInspectorHUD(QWidget):
         layout.addLayout(sampler_hdr_row)
 
         # Scrollable container for sampler rows
-        self.samplers_scroll = QScrollArea(self)
+        self.samplers_scroll = BlenderScrollArea(self)
         self.samplers_scroll.setWidgetResizable(True)
         self.samplers_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.samplers_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)

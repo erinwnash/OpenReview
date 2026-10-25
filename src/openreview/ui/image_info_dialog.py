@@ -6,9 +6,11 @@ file paths, frame counts, timecode, codecs, bitrates, audio streams, and contain
 from __future__ import annotations
 
 import os
+import json
 import time
 from typing import Optional, Dict, Any
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QWidget,
@@ -21,7 +23,36 @@ from PySide6.QtWidgets import (
     QFrame,
     QScrollArea,
     QApplication,
+    QLineEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QMenu,
+    QFileDialog,
 )
+
+from openreview.widgets.draggable_scroll_area import BlenderScrollArea
+
+
+class MetaTableWidget(QTableWidget):
+    """Custom table widget supporting keyboard copy (Ctrl+C)."""
+
+    def keyPressEvent(self, event) -> None:
+        if event.matches(QKeySequence.StandardKey.Copy):
+            selected = self.selectedRanges()
+            if selected:
+                lines = []
+                for rng in selected:
+                    for r in range(rng.topRow(), rng.bottomRow() + 1):
+                        if not self.isRowHidden(r):
+                            k = self.item(r, 0).text() if self.item(r, 0) else ""
+                            v = self.item(r, 1).text() if self.item(r, 1) else ""
+                            lines.append(f"{k}: {v}")
+                if lines:
+                    QApplication.clipboard().setText("\n".join(lines))
+                    event.accept()
+                    return
+        super().keyPressEvent(event)
 
 
 class ImageInfoWidget(QWidget):
@@ -30,25 +61,32 @@ class ImageInfoWidget(QWidget):
     def __init__(self, media_info: Optional[Dict[str, Any]] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.info = media_info or {}
-        self.setMinimumWidth(440)
-        self.setMinimumHeight(480)
+        self.setMinimumWidth(480)
+        self.setMinimumHeight(520)
+        self.filter_edit: Optional[QLineEdit] = None
+        self.meta_table: Optional[MetaTableWidget] = None
+        self.tag_grp: Optional[QGroupBox] = None
 
         self.setStyleSheet("""
             QWidget {
-                background-color: #1a1a1a;
+                background-color: transparent;
                 color: #e0e0e0;
             }
             QGroupBox {
                 border: 1px solid #333333;
                 border-radius: 4px;
-                margin-top: 10px;
-                padding-top: 10px;
+                margin-top: 14px;
+                padding-top: 14px;
+                padding-bottom: 8px;
+                padding-left: 8px;
+                padding-right: 8px;
                 font-size: 11px;
                 font-weight: bold;
                 color: #e5a823;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
+                subcontrol-position: top left;
                 left: 10px;
                 padding: 0 4px;
             }
@@ -89,6 +127,41 @@ class ImageInfoWidget(QWidget):
                 color: #ffffff;
                 border-color: #666666;
             }
+            QLineEdit#meta_filter {
+                background-color: #141414;
+                color: #ffffff;
+                border: 1px solid #3a3a3a;
+                border-radius: 3px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            QLineEdit#meta_filter:focus {
+                border-color: #e5a823;
+            }
+            QTableWidget#meta_table {
+                background-color: #151515;
+                alternate-background-color: #1b1b1b;
+                color: #d0d0d0;
+                border: 1px solid #2e2e2e;
+                gridline-color: #242424;
+                font-family: Consolas, monospace;
+                font-size: 11px;
+            }
+            QTableWidget#meta_table::item {
+                padding: 3px 6px;
+            }
+            QTableWidget#meta_table::item:selected {
+                background-color: #383838;
+                color: #ffffff;
+            }
+            QHeaderView::section {
+                background-color: #222222;
+                color: #aaaaaa;
+                padding: 4px;
+                border: 1px solid #2e2e2e;
+                font-weight: bold;
+                font-size: 10px;
+            }
             QScrollArea {
                 border: none;
                 background-color: transparent;
@@ -101,7 +174,7 @@ class ImageInfoWidget(QWidget):
         self._main_layout.setSpacing(8)
 
         # Scroll Area created ONCE
-        self._scroll_area = QScrollArea(self)
+        self._scroll_area = BlenderScrollArea(self)
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
         self._main_layout.addWidget(self._scroll_area, stretch=1)
@@ -114,6 +187,11 @@ class ImageInfoWidget(QWidget):
         self.btn_copy.setObjectName("btn_copy")
         self.btn_copy.clicked.connect(self._on_copy_all)
         btn_box.addWidget(self.btn_copy)
+
+        self.btn_export = QPushButton("Export JSON", self)
+        self.btn_export.setObjectName("btn_copy")
+        self.btn_export.clicked.connect(self._on_export_json)
+        btn_box.addWidget(self.btn_export)
 
         btn_box.addStretch()
 
@@ -134,10 +212,15 @@ class ImageInfoWidget(QWidget):
 
     def _rebuild_content(self) -> None:
         """Construct rich metadata view inside scroll area."""
+        old_w = self._scroll_area.takeWidget()
+        if old_w:
+            old_w.deleteLater()
+
         content_w = QWidget()
+        content_w.setStyleSheet("background: transparent;")
         c_layout = QVBoxLayout(content_w)
-        c_layout.setContentsMargins(4, 4, 4, 4)
-        c_layout.setSpacing(10)
+        c_layout.setContentsMargins(6, 6, 6, 6)
+        c_layout.setSpacing(12)
 
         def add_row(grid: QGridLayout, r: int, label: str, value: str):
             h = QLabel(label)
@@ -185,7 +268,120 @@ class ImageInfoWidget(QWidget):
 
         c_layout.addWidget(file_grp)
 
-        # 2. Video & Codec Specifications
+        # 2. Comprehensive Embedded Metadata Table (EXR header tags, FFprobe, PIL EXIF, IPTC)
+        exr_details = self.info.get("exr_details")
+        tags = dict(self.info.get("all_metadata_tags", {}))
+        if not tags:
+            tags.update(self.info.get("stream_tags", {}))
+            tags.update(self.info.get("format_tags", {}))
+            tags.update(self.info.get("image_info_tags", {}))
+            tags.update(self.info.get("exif_tags", {}))
+            if exr_details and "attributes" in exr_details:
+                tags.update(exr_details["attributes"])
+
+        if tags:
+            tag_grp = QGroupBox(f"Embedded Metadata && Header Attributes ({len(tags)})", content_w)
+            self.tag_grp = tag_grp
+            tg_vbox = QVBoxLayout(tag_grp)
+            tg_vbox.setSpacing(6)
+
+            # Search Filter Bar
+            filter_box = QHBoxLayout()
+            filter_box.setSpacing(6)
+            lbl_filter = QLabel("Filter:")
+            lbl_filter.setObjectName("hdr")
+            lbl_filter.setFixedWidth(40)
+            self.filter_edit = QLineEdit(tag_grp)
+            self.filter_edit.setObjectName("meta_filter")
+            self.filter_edit.setPlaceholderText("Search attributes or values...")
+            self.filter_edit.setClearButtonEnabled(True)
+            self.filter_edit.textChanged.connect(self._on_filter_changed)
+            filter_box.addWidget(lbl_filter)
+            filter_box.addWidget(self.filter_edit)
+            tg_vbox.addLayout(filter_box)
+
+            # 2-column Metadata Table
+            self.meta_table = MetaTableWidget(tag_grp)
+            self.meta_table.setObjectName("meta_table")
+            self.meta_table.setAlternatingRowColors(True)
+            self.meta_table.setColumnCount(2)
+            self.meta_table.setHorizontalHeaderLabels(["Attribute Key", "Value"])
+            self.meta_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+            self.meta_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            self.meta_table.setColumnWidth(0, 180)
+            self.meta_table.verticalHeader().setVisible(False)
+            self.meta_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            self.meta_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+            self.meta_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.meta_table.customContextMenuRequested.connect(self._on_table_context_menu)
+
+            sorted_keys = sorted(tags.keys(), key=lambda x: str(x).lower())
+            self.meta_table.setRowCount(len(sorted_keys))
+            for row_idx, key in enumerate(sorted_keys):
+                val_str = str(tags[key])
+                item_key = QTableWidgetItem(str(key))
+                item_key.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                item_val = QTableWidgetItem(val_str)
+                item_val.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                self.meta_table.setItem(row_idx, 0, item_key)
+                self.meta_table.setItem(row_idx, 1, item_val)
+
+            # Sizing: table dynamically expands with stretch=1
+            table_height = min(380, max(160, len(sorted_keys) * 25 + 32))
+            self.meta_table.setMinimumHeight(table_height)
+            tg_vbox.addWidget(self.meta_table, 1)
+
+            c_layout.addWidget(tag_grp, 1)
+        else:
+            self.meta_table = None
+            self.filter_edit = None
+            self.tag_grp = None
+
+        # 3. OpenEXR Header Specifications (if present)
+        if exr_details:
+            exr_grp = QGroupBox("OpenEXR Specifications", content_w)
+            exr_layout = QGridLayout(exr_grp)
+            exr_layout.setSpacing(5)
+
+            disp_w = exr_details.get("display_window")
+            if disp_w:
+                dw_w = disp_w[2] - disp_w[0] + 1
+                dw_h = disp_w[3] - disp_w[1] + 1
+                add_row(exr_layout, 0, "Display Window:", f"({disp_w[0]}, {disp_w[1]}) - ({disp_w[2]}, {disp_w[3]}) [{dw_w}x{dw_h}]")
+
+            dw = exr_details.get("data_window")
+            if dw:
+                bbox_w = dw[2] - dw[0] + 1
+                bbox_h = dw[3] - dw[1] + 1
+                add_row(exr_layout, 1, "Data Window (BBox):", f"({dw[0]}, {dw[1]}) - ({dw[2]}, {dw[3]}) [{bbox_w}x{bbox_h}]")
+
+            if exr_details.get("compression"):
+                add_row(exr_layout, 2, "Compression:", str(exr_details["compression"]))
+
+            if exr_details.get("line_order"):
+                add_row(exr_layout, 3, "Line Order:", str(exr_details["line_order"]))
+
+            if exr_details.get("pixel_aspect") is not None:
+                add_row(exr_layout, 4, "Pixel Aspect:", f"{float(exr_details['pixel_aspect']):.4f}")
+
+            channels = exr_details.get("channels", [])
+            if channels:
+                ch_strs = [f"{c.get('name', '')} ({c.get('type', '')})" if c.get('type') else c.get('name', '') for c in channels]
+                ch_display = ", ".join(ch_strs[:16]) + (" ..." if len(ch_strs) > 16 else "")
+                add_row(exr_layout, 5, f"Channels ({len(channels)}):", ch_display)
+
+            layers = exr_details.get("layers", [])
+            if layers:
+                layers_display = ", ".join(layers[:16]) + (" ..." if len(layers) > 16 else "")
+                add_row(exr_layout, 6, f"AOVs / Layers ({len(layers)}):", layers_display)
+
+            cryptos = exr_details.get("cryptomatte_layers", [])
+            if cryptos:
+                add_row(exr_layout, 7, f"Cryptomatte ({len(cryptos)}):", ", ".join(cryptos))
+
+            c_layout.addWidget(exr_grp)
+
+        # 4. Video & Codec Specifications
         v_grp = QGroupBox("Video & Codec Specifications", content_w)
         vg_layout = QGridLayout(v_grp)
         vg_layout.setSpacing(5)
@@ -246,7 +442,7 @@ class ImageInfoWidget(QWidget):
 
         c_layout.addWidget(v_grp)
 
-        # 3. Audio Stream Specifications (if present)
+        # 4. Audio Stream Specifications (if present)
         if self.info.get("audio_codec"):
             a_grp = QGroupBox("Audio Stream Specifications", content_w)
             ag_layout = QGridLayout(a_grp)
@@ -265,7 +461,7 @@ class ImageInfoWidget(QWidget):
 
             c_layout.addWidget(a_grp)
 
-        # 4. Timeline & Playback
+        # 5. Timeline & Playback
         t_grp = QGroupBox("Timeline & Playback", content_w)
         tg_layout = QGridLayout(t_grp)
         tg_layout.setSpacing(5)
@@ -294,7 +490,7 @@ class ImageInfoWidget(QWidget):
 
         c_layout.addWidget(t_grp)
 
-        # 5. Studio OCIO & Viewport Color
+        # 6. Studio OCIO & Viewport Color
         ocio_grp = QGroupBox("Studio OCIO & Viewport Color", content_w)
         og_layout = QGridLayout(ocio_grp)
         og_layout.setSpacing(5)
@@ -307,32 +503,71 @@ class ImageInfoWidget(QWidget):
 
         c_layout.addWidget(ocio_grp)
 
-        # 6. Container / Stream Tags (if present)
-        tags = dict(self.info.get("stream_tags", {}))
-        tags.update(self.info.get("format_tags", {}))
-        tags.update(self.info.get("image_info_tags", {}))
-
-        if tags:
-            tag_grp = QGroupBox("Embedded Metadata & Tags", content_w)
-            tag_layout = QGridLayout(tag_grp)
-            tag_layout.setSpacing(4)
-            r = 0
-            for k, v in list(tags.items())[:12]:
-                add_row(tag_layout, r, f"{k}:", str(v))
-                r += 1
-            c_layout.addWidget(tag_grp)
-
         c_layout.addStretch()
         self._scroll_area.setWidget(content_w)
+
+    def _on_filter_changed(self, text: str) -> None:
+        """Filter table rows matching attribute key or value."""
+        if not self.meta_table:
+            return
+        search = text.lower().strip()
+        visible_count = 0
+        total = self.meta_table.rowCount()
+
+        for r in range(total):
+            k_item = self.meta_table.item(r, 0)
+            v_item = self.meta_table.item(r, 1)
+            k_str = k_item.text().lower() if k_item else ""
+            v_str = v_item.text().lower() if v_item else ""
+            match = (not search) or (search in k_str) or (search in v_str)
+            self.meta_table.setRowHidden(r, not match)
+            if match:
+                visible_count += 1
+
+        if self.tag_grp:
+            if search:
+                self.tag_grp.setTitle(f"Embedded Metadata ({visible_count}/{total} matching)")
+            else:
+                self.tag_grp.setTitle(f"Embedded Metadata && Header Attributes ({total})")
+
+    def _on_table_context_menu(self, pos) -> None:
+        """Right-click context menu on metadata table."""
+        if not self.meta_table:
+            return
+        item = self.meta_table.itemAt(pos)
+        if not item:
+            return
+        r = item.row()
+        k_item = self.meta_table.item(r, 0)
+        v_item = self.meta_table.item(r, 1)
+        k_text = k_item.text() if k_item else ""
+        v_text = v_item.text() if v_item else ""
+
+        menu = QMenu(self)
+        act_copy_val = menu.addAction("Copy Value")
+        act_copy_key = menu.addAction("Copy Key")
+        act_copy_row = menu.addAction("Copy Key & Value")
+
+        action = menu.exec(self.meta_table.viewport().mapToGlobal(pos))
+        if action == act_copy_val:
+            QApplication.clipboard().setText(v_text)
+        elif action == act_copy_key:
+            QApplication.clipboard().setText(k_text)
+        elif action == act_copy_row:
+            QApplication.clipboard().setText(f"{k_text}: {v_text}")
 
     def _on_copy_all(self) -> None:
         """Copy formatted metadata string to system clipboard."""
         lines = ["=== OpenReview Source Media Details ==="]
-        for k, v in sorted(self.info.items()):
+        for k, v in sorted(self.info.items(), key=lambda x: str(x[0]).lower()):
             if isinstance(v, dict):
                 lines.append(f"\n[{k}]")
-                for sub_k, sub_v in v.items():
+                for sub_k, sub_v in sorted(v.items(), key=lambda x: str(x[0]).lower()):
                     lines.append(f"  {sub_k}: {sub_v}")
+            elif isinstance(v, list):
+                lines.append(f"\n[{k}]")
+                for item in v:
+                    lines.append(f"  - {item}")
             else:
                 lines.append(f"{k}: {v}")
         text = "\n".join(lines)
@@ -340,6 +575,31 @@ class ImageInfoWidget(QWidget):
         self.btn_copy.setText("✓ Copied!")
         from PySide6.QtCore import QTimer
         QTimer.singleShot(1800, lambda: self.btn_copy.setText("Copy All to Clipboard"))
+
+    def _on_export_json(self) -> None:
+        """Export all source metadata to a JSON file."""
+        initial_name = "metadata.json"
+        if self.info.get("file_name"):
+            base = os.path.splitext(self.info["file_name"])[0]
+            initial_name = f"{base}_metadata.json"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Metadata JSON",
+            initial_name,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if file_path:
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(self.info, f, indent=2, default=str)
+                self.btn_export.setText("✓ Exported!")
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(1800, lambda: self.btn_export.setText("Export JSON"))
+            except Exception:
+                self.btn_export.setText("Export Failed")
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(1800, lambda: self.btn_export.setText("Export JSON"))
 
     def _on_close_clicked(self) -> None:
         p = self.parent()
@@ -351,7 +611,15 @@ class ImageInfoWidget(QWidget):
             self.close()
 
     def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key.Key_I, Qt.Key.Key_Escape):
+        if event.key() == Qt.Key.Key_Escape:
+            self._on_close_clicked()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_I:
+            # Prevent closing when user is actively searching in the filter box
+            if self.filter_edit and self.filter_edit.hasFocus():
+                super().keyPressEvent(event)
+                return
             self._on_close_clicked()
             event.accept()
             return

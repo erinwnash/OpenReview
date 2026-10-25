@@ -505,10 +505,7 @@ class RingBufferCache(QObject):
             mode = CacheMode(mode)
         if self._mode != mode:
             self._mode = mode
-            if self._mode == CacheMode.OFF:
-                self.clear()
-            else:
-                self._emit_status()
+            self._emit_status()
             self.mode_changed.emit(self._mode.value)
 
     def set_region_bounds(self, in_frame: int, out_frame: int) -> None:
@@ -714,7 +711,7 @@ class RingBufferCache(QObject):
     # --------------------------------------------------------------------------
     def get_source_frame(self, source_id: str, frame: int) -> Optional[np.ndarray]:
         """Retrieve a cached frame for a specific input source (RAM first, then Temp Disk)."""
-        if self._mode == CacheMode.OFF or not source_id:
+        if not source_id:
             return None
         with self._lock:
             ram_res = self._frames.get((source_id, frame))
@@ -728,7 +725,7 @@ class RingBufferCache(QObject):
 
     def has_source_frame(self, source_id: str, frame: int) -> bool:
         """Check if a specific source frame is in RAM or Temp Disk cache."""
-        if self._mode == CacheMode.OFF or not source_id:
+        if not source_id:
             return False
         with self._lock:
             if (source_id, frame) in self._frames:
@@ -739,7 +736,7 @@ class RingBufferCache(QObject):
 
     def has_source_frame_ram(self, source_id: str, frame: int) -> bool:
         """Check if frame is in Tier-1 RAM cache specifically."""
-        if self._mode == CacheMode.OFF or not source_id:
+        if not source_id:
             return False
         with self._lock:
             return (source_id, frame) in self._frames
@@ -806,14 +803,14 @@ class RingBufferCache(QObject):
     # --------------------------------------------------------------------------
     def get_layer_frame(self, source_id: str, frame: int, layer: str) -> Optional[np.ndarray]:
         """Retrieve a cached multi-channel layer frame."""
-        if self._mode == CacheMode.OFF or not source_id or not layer:
+        if not source_id or not layer:
             return None
         with self._lock:
             return self._layer_cache.get((source_id, frame, layer))
 
     def has_layer_frame(self, source_id: str, frame: int, layer: str) -> bool:
         """Check if a specific multi-channel layer frame is in Tier-2 RAM cache."""
-        if self._mode == CacheMode.OFF or not source_id or not layer:
+        if not source_id or not layer:
             return False
         with self._lock:
             return (source_id, frame, layer) in self._layer_cache
@@ -922,8 +919,6 @@ class RingBufferCache(QObject):
     # --------------------------------------------------------------------------
     def get_frame(self, frame: int) -> Optional[Any]:
         """Retrieve a frame if present in RAM cache, else return None."""
-        if self._mode == CacheMode.OFF:
-            return None
         with self._lock:
             if self._active_source_id:
                 res = self._frames.get((self._active_source_id, frame))

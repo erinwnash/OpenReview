@@ -48,6 +48,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
+from openreview.widgets.draggable_scroll_area import BlenderScrollArea
+
 from openreview.core.sequence_parser import (
     SEQUENCE_REGEX,
     detect_image_sequence,
@@ -132,7 +134,7 @@ class BreadcrumbBarWidget(QWidget):
         self.crumb_layout.setSpacing(2)
         self.crumb_layout.addStretch()
 
-        self.scroll_area = QScrollArea()
+        self.scroll_area = BlenderScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1177,15 +1179,8 @@ class FileBrowserTreeWidget(QTreeWidget):
 
     def _reveal_in_explorer(self, target_path: str) -> None:
         """Reveal file or folder in OS file manager."""
-        if not os.path.exists(target_path):
-            return
-        if sys.platform.startswith("win"):
-            subprocess.run(["explorer", "/select,", os.path.normpath(target_path)], check=False)
-        elif sys.platform.startswith("darwin"):
-            subprocess.run(["open", "-R", target_path], check=False)
-        else:
-            parent_dir = os.path.dirname(target_path) if os.path.isfile(target_path) else target_path
-            subprocess.run(["xdg-open", parent_dir], check=False)
+        from openreview.core.system_utils import reveal_in_os_file_manager
+        reveal_in_os_file_manager(target_path)
 
 
 # ==============================================================================

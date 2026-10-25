@@ -79,16 +79,20 @@ class MediaSourcesTreeWidget(QTreeWidget):
             mime = QMimeData()
         urls = []
         paths = []
+        source_ids = []
         for item in items:
             data = item.data(0, Qt.ItemDataRole.UserRole)
             if isinstance(data, dict):
                 iid = data.get("id")
+                if data.get("type") == "source" and iid:
+                    source_ids.append(iid)
                 # Look up source path from session graph if available
                 panel = self.parent()
-                while panel and not hasattr(panel, "session_graph"):
+                while panel and not hasattr(panel, "session_graph") and not hasattr(panel, "graph"):
                     panel = panel.parent() if hasattr(panel, "parent") else None
-                if panel and hasattr(panel, "session_graph"):
-                    src = panel.session_graph.sources.get(iid)
+                graph = getattr(panel, "graph", None) or getattr(panel, "session_graph", None) if panel else None
+                if graph and iid:
+                    src = graph.sources.get(iid)
                     if src and src.path:
                         paths.append(src.path)
                         urls.append(QUrl.fromLocalFile(src.path))
@@ -96,6 +100,9 @@ class MediaSourcesTreeWidget(QTreeWidget):
             mime.setUrls(urls)
         if paths:
             mime.setText(paths[0])
+        if source_ids:
+            import json
+            mime.setData("application/x-openreview-source-ids", json.dumps(source_ids).encode("utf-8"))
         return mime
 
 
@@ -1177,25 +1184,10 @@ class SourcesPanelWidget(QWidget):
             except Exception:
                 pass
 
-        target_path = os.path.normpath(target_path)
-        try:
-            if sys.platform == "win32":
-                if os.path.exists(target_path):
-                    subprocess.Popen(["explorer.exe", f"/select,{target_path}"])
-                else:
-                    dir_path = os.path.dirname(target_path)
-                    if os.path.exists(dir_path):
-                        os.startfile(dir_path)
-            elif sys.platform == "darwin":
-                if os.path.exists(target_path):
-                    subprocess.Popen(["open", "-R", target_path])
-                else:
-                    subprocess.Popen(["open", os.path.dirname(target_path)])
-            else:
-                dir_path = os.path.dirname(target_path) if os.path.isfile(target_path) else target_path
-                subprocess.Popen(["xdg-open", dir_path])
-        except Exception as e:
-            QMessageBox.warning(self, "Reveal in Explorer", f"Unable to reveal in explorer:\n{e}")
+        from openreview.core.system_utils import reveal_in_os_file_manager
+        success = reveal_in_os_file_manager(target_path)
+        if not success:
+            QMessageBox.warning(self, "Reveal in Explorer", f"Unable to reveal in explorer:\n{target_path}")
 
     def _on_delete_selected(self) -> None:
         for node in self._get_selected_nodes():
@@ -1380,6 +1372,8 @@ class SourcesPanelWidget(QWidget):
         vtype = self.graph.active_view_type
 
         # 1. Update [Inputs] Tab
+        prev_input_row = self.list_inputs.currentRow()
+        self.list_inputs.blockSignals(True)
         self.list_inputs.clear()
         if vtype == ViewType.SEQUENCE and isinstance(viewable, SequenceView):
             self.lbl_inputs_view.setText(f"Sequence: {viewable.name}")
@@ -1410,8 +1404,13 @@ class SourcesPanelWidget(QWidget):
                 item.setData(Qt.ItemDataRole.UserRole, idx)
                 self.list_inputs.addItem(item)
 
-            if 0 <= viewable.current_layer_index < self.list_inputs.count():
-                self.list_inputs.setCurrentRow(viewable.current_layer_index)
+            if viewable.compare_mode == "switch":
+                target_row = viewable.current_layer_index
+            else:
+                target_row = prev_input_row if (0 <= prev_input_row < self.list_inputs.count()) else viewable.index_a
+
+            if 0 <= target_row < self.list_inputs.count():
+                self.list_inputs.setCurrentRow(target_row)
 
             # Match mode in combo
             modes_map = {
@@ -1454,6 +1453,7 @@ class SourcesPanelWidget(QWidget):
             self.stack_tools_frame.hide()
             if isinstance(viewable, SourceItem):
                 self.list_inputs.addItem(QListWidgetItem(f"Source: {viewable.name}"))
+        self.list_inputs.blockSignals(False)
 
         # 2. Update [Edit] Tab
         selected_nodes = self._get_selected_nodes()
@@ -1467,8 +1467,8 @@ class SourcesPanelWidget(QWidget):
             elif first.get("type") == "layout":
                 target_layout = self.graph.layouts.get(first.get("id"))
 
-        if not target_source and isinstance(viewable, SourceItem):
-            target_source = viewable
+        if not target_source:
+            target_source = self._get_target_source()
         if not target_layout and isinstance(viewable, LayoutView):
             target_layout = viewable
 
@@ -1504,41 +1504,52 @@ class SourcesPanelWidget(QWidget):
                 self.combo_layout_align.setCurrentIndex(a_idx)
                 self.combo_layout_align.blockSignals(False)
         else:
-            self.frame_layout_edit.hide()
-            self.frame_clip_edit.show()
             if target_source:
-                self.spin_in.blockSignals(True)
-                self.spin_out.blockSignals(True)
-                self.spin_start_at.blockSignals(True)
-                self.spin_fps.blockSignals(True)
-                self.combo_colorspace.blockSignals(True)
+                self._populate_clip_edit(target_source)
+            else:
+                self.frame_layout_edit.hide()
+                self.frame_clip_edit.hide()
 
-                self.spin_in.setValue(target_source.start_frame)
-                self.spin_out.setValue(target_source.end_frame)
-                self.spin_start_at.setValue(target_source.start_frame)
-                self._sync_start_at_combo_preset(target_source.start_frame)
-                self.spin_fps.setValue(target_source.fps)
-                c_idx = self.combo_colorspace.findText(target_source.colorspace, Qt.MatchFlag.MatchContains)
-                if c_idx >= 0:
-                    self.combo_colorspace.setCurrentIndex(c_idx)
-                self.lbl_res_info.setText(f"Resolution: {target_source.resolution_str} | {target_source.fps:.2f} fps")
-                self.lbl_codec_info.setText(f"Codec: {target_source.codec} | Range: [{target_source.start_frame}..{target_source.end_frame}]")
+    def _on_open_source_details(self) -> None:
+        """Trigger Source Media Details panel from Edit tab."""
+        w = self.window()
+        if w and hasattr(w, "_on_show_source_details"):
+            w._on_show_source_details()
 
-                self.spin_in.blockSignals(False)
-                self.spin_out.blockSignals(False)
-                self.spin_start_at.blockSignals(False)
-                self.spin_fps.blockSignals(False)
-                self.combo_colorspace.blockSignals(False)
+    def _populate_clip_edit(self, target_source: SourceItem) -> None:
+        self.frame_layout_edit.hide()
+        self.frame_clip_edit.show()
+        if not target_source:
+            return
 
-        # 3. Dynamic EXR Properties Bar visibility
+        self.spin_in.blockSignals(True)
+        self.spin_out.blockSignals(True)
+        self.spin_start_at.blockSignals(True)
+        self.spin_fps.blockSignals(True)
+        self.combo_colorspace.blockSignals(True)
+
+        self.spin_in.setValue(target_source.start_frame)
+        self.spin_out.setValue(target_source.end_frame)
+        self.spin_start_at.setValue(target_source.start_frame)
+        self._sync_start_at_combo_preset(target_source.start_frame)
+        self.spin_fps.setValue(target_source.fps)
+        c_idx = self.combo_colorspace.findText(target_source.colorspace, Qt.MatchFlag.MatchContains)
+        if c_idx >= 0:
+            self.combo_colorspace.setCurrentIndex(c_idx)
+        self.lbl_res_info.setText(f"Resolution: {target_source.resolution_str} | {target_source.fps:.2f} fps")
+        self.lbl_codec_info.setText(f"Codec: {target_source.codec} | Range: [{target_source.start_frame}..{target_source.end_frame}]")
+
+        self.spin_in.blockSignals(False)
+        self.spin_out.blockSignals(False)
+        self.spin_start_at.blockSignals(False)
+        self.spin_fps.blockSignals(False)
+        self.combo_colorspace.blockSignals(False)
+
+        # Dynamic EXR Properties Bar visibility
         exr_path = None
-        target_p = getattr(target_source, "path", getattr(target_source, "file_path", None)) if target_source else None
-        viewable_p = getattr(viewable, "path", getattr(viewable, "file_path", None)) if isinstance(viewable, SourceItem) else None
-
+        target_p = getattr(target_source, "path", getattr(target_source, "file_path", None))
         if target_p and str(target_p).lower().endswith(".exr"):
-            exr_path = target_p
-        elif viewable_p and str(viewable_p).lower().endswith(".exr"):
-            exr_path = viewable_p
+            exr_path = str(target_p)
 
         if exr_path and hasattr(self, "exr_properties_bar"):
             try:
@@ -1552,20 +1563,30 @@ class SourcesPanelWidget(QWidget):
         elif hasattr(self, "exr_properties_bar"):
             self.exr_properties_bar.hide()
 
-    def _on_open_source_details(self) -> None:
-        """Trigger Source Media Details panel from Edit tab."""
-        w = self.window()
-        if w and hasattr(w, "_on_show_source_details"):
-            w._on_show_source_details()
-
     def _on_input_selected(self) -> None:
-        pass
+        if self.list_inputs.signalsBlocked() or getattr(self, "_suppress_input_events", False):
+            return
+        row = self.list_inputs.currentRow()
+        if row >= 0:
+            viewable = self.graph.get_active_viewable()
+            target_source = None
+            if isinstance(viewable, StackView) and 0 <= row < len(viewable.source_ids):
+                target_source = self.graph.sources.get(viewable.source_ids[row])
+            elif isinstance(viewable, SequenceView) and 0 <= row < len(viewable.clips):
+                target_source = self.graph.sources.get(viewable.clips[row].source_id)
+            elif isinstance(viewable, LayoutView) and 0 <= row < len(viewable.source_ids):
+                target_source = self.graph.sources.get(viewable.source_ids[row])
+
+            if target_source:
+                self._populate_clip_edit(target_source)
+            self.view_updated.emit()
 
     def _on_input_item_clicked(self, item: QListWidgetItem) -> None:
-        """Clicking an input highlights it in the list without altering Layer A/B until user sets it."""
+        """Clicking an input highlights it in the list and updates Edit tab & details."""
         row = self.list_inputs.row(item)
         if row >= 0:
             self.list_inputs.setCurrentRow(row)
+            self._on_input_selected()
 
     def _on_inputs_context_menu(self, pos: QPoint) -> None:
         """Right-click menu on stack inputs list to assign Layer A or Layer B."""
@@ -1712,8 +1733,30 @@ class SourcesPanelWidget(QWidget):
         selected_nodes = self._get_selected_nodes()
         if selected_nodes and selected_nodes[0].get("type") == "source":
             return self.graph.sources.get(selected_nodes[0].get("id"))
-        elif self.graph.active_view_type == ViewType.SOURCE and self.graph.active_view_id:
+
+        viewable = self.graph.get_active_viewable()
+        if isinstance(viewable, SourceItem):
+            return viewable
+
+        if isinstance(viewable, StackView) and viewable.source_ids:
+            cur_row = self.list_inputs.currentRow()
+            if 0 <= cur_row < len(viewable.source_ids):
+                sid = viewable.source_ids[cur_row]
+                src = self.graph.sources.get(sid)
+                if src:
+                    return src
+            if viewable.compare_mode == "switch":
+                src = viewable.get_current_layer(self.graph.sources)
+                if src:
+                    return src
+            src = viewable.get_layer_a(self.graph.sources)
+            if src:
+                return src
+            return self.graph.sources.get(viewable.source_ids[0])
+
+        if self.graph.active_view_type == ViewType.SOURCE and self.graph.active_view_id:
             return self.graph.sources.get(self.graph.active_view_id)
+
         return None
 
     def _sync_start_at_combo_preset(self, val: int) -> None:

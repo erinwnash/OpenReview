@@ -6,13 +6,35 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, asdict
+import sys
+import logging
+import shutil
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional
 from PySide6.QtCore import QObject, Signal, QSettings
 
+logger = logging.getLogger(__name__)
 
-from dataclasses import dataclass, asdict, field
+
+def get_app_config_dir() -> Path:
+    """Return platform-standard user application config directory for OpenReview."""
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            win_dir = Path(appdata) / "OpenReview"
+            legacy_dir = Path.home() / ".openreview"
+            legacy_file = legacy_dir / "preferences.json"
+            win_file = win_dir / "preferences.json"
+            if legacy_file.is_file() and not win_file.is_file():
+                try:
+                    win_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(legacy_file, win_file)
+                except Exception as e:
+                    logger.debug("Failed migrating legacy preferences: %s", e)
+            return win_dir
+    return Path.home() / ".openreview"
+
 
 @dataclass
 class UserPreferences:
@@ -23,6 +45,7 @@ class UserPreferences:
     canvas_scrub_enabled: bool = True
     auto_retime_mismatched_fps: bool = True
     play_all_frames: bool = True
+    default_brush_width: float = 6.0
 
     # Caching
     default_cache_mode: str = "off"  # "off", "play_ahead", "region", "all"
@@ -59,6 +82,7 @@ class UserPreferences:
     continuous_playback: bool = False
     safe_guides_enabled: bool = False
     safe_guides_matte_constrained: bool = True
+    hud_opacity: float = 0.85  # 0.30 to 1.00 (30% to 100%)
 
     # Studio OpenColorIO Configuration
     ocio_config_path: str = ""
@@ -75,6 +99,24 @@ class UserPreferences:
     # Console & Diagnostics
     console_auto_open_on_error: bool = True
 
+    # PDF Review Sheet Generation & Layouting
+    pdf_title: str = "OpenReview - VFX Review Sheet"
+    pdf_studio_name: str = ""
+    pdf_author_name: str = ""
+    pdf_logo_path: str = ""
+    pdf_header_color: str = "#c28a10"
+    pdf_show_date: bool = True
+    pdf_show_fps: bool = True
+    pdf_show_keyframe_count: bool = True
+    pdf_page_size: str = "letter"  # "letter", "a4", "legal"
+    pdf_page_orientation: str = "landscape"  # "landscape", "portrait"
+    pdf_layout_mode: str = "detailed_row"  # "detailed_row", "dense_grid"
+    pdf_show_frame_num: bool = True
+    pdf_show_timecode: bool = True
+    pdf_show_stroke_count: bool = True
+    pdf_show_notes: bool = True
+    pdf_show_source_path: bool = True
+
 
 class PreferencesManager(QObject):
     """
@@ -87,7 +129,7 @@ class PreferencesManager(QObject):
     def __init__(self, config_dir: Optional[Path] = None, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._use_qsettings = (config_dir is None)
-        self.config_dir = config_dir or (Path.home() / ".openreview")
+        self.config_dir = config_dir or get_app_config_dir()
         self.config_file = self.config_dir / "preferences.json"
         self._prefs = UserPreferences()
         self.load()
@@ -149,6 +191,7 @@ class PreferencesManager(QObject):
                     continuous_playback=bool(data.get("continuous_playback", False)),
                     safe_guides_enabled=bool(data.get("safe_guides_enabled", False)),
                     safe_guides_matte_constrained=bool(data.get("safe_guides_matte_constrained", True)),
+                    hud_opacity=float(data.get("hud_opacity", 0.85)),
                     ocio_config_path=str(data.get("ocio_config_path", "")),
                     ocio_display=str(data.get("ocio_display", "")),
                     ocio_view=str(data.get("ocio_view", "")),
@@ -158,10 +201,27 @@ class PreferencesManager(QObject):
                     sync_username=str(data.get("sync_username", "Artist")),
                     sync_playlist_enabled=bool(data.get("sync_playlist_enabled", True)),
                     console_auto_open_on_error=bool(data.get("console_auto_open_on_error", True)),
+                    default_brush_width=float(data.get("default_brush_width", 6.0)),
+                    pdf_title=str(data.get("pdf_title", "OpenReview - VFX Review Sheet")),
+                    pdf_studio_name=str(data.get("pdf_studio_name", "")),
+                    pdf_author_name=str(data.get("pdf_author_name", "")),
+                    pdf_logo_path=str(data.get("pdf_logo_path", "")),
+                    pdf_header_color=str(data.get("pdf_header_color", "#c28a10")),
+                    pdf_show_date=bool(data.get("pdf_show_date", True)),
+                    pdf_show_fps=bool(data.get("pdf_show_fps", True)),
+                    pdf_show_keyframe_count=bool(data.get("pdf_show_keyframe_count", True)),
+                    pdf_page_size=str(data.get("pdf_page_size", "letter")),
+                    pdf_page_orientation=str(data.get("pdf_page_orientation", "landscape")),
+                    pdf_layout_mode=str(data.get("pdf_layout_mode", "detailed_row")),
+                    pdf_show_frame_num=bool(data.get("pdf_show_frame_num", True)),
+                    pdf_show_timecode=bool(data.get("pdf_show_timecode", True)),
+                    pdf_show_stroke_count=bool(data.get("pdf_show_stroke_count", True)),
+                    pdf_show_notes=bool(data.get("pdf_show_notes", True)),
+                    pdf_show_source_path=bool(data.get("pdf_show_source_path", True)),
                 )
                 return self._prefs
             except Exception as e:
-                print(f"[PreferencesManager] Failed to read JSON config: {e}. Falling back.")
+                logger.warning("[PreferencesManager] Failed to read JSON config: %s. Falling back.", e)
 
         # Fallback to QSettings only for default user config
         if self._use_qsettings:
@@ -181,12 +241,30 @@ class PreferencesManager(QObject):
                 self._prefs.prefetch_buffer_size = int(settings.value("prefetch_buffer_size", 48))
                 self._prefs.fast_playback_laptop_mode = settings.value("fast_playback_laptop_mode", False, type=bool)
                 self._prefs.console_auto_open_on_error = settings.value("console_auto_open_on_error", True, type=bool)
+                self._prefs.default_brush_width = float(settings.value("default_brush_width", 6.0))
+                self._prefs.hud_opacity = float(settings.value("hud_opacity", 0.85))
+                self._prefs.pdf_title = str(settings.value("pdf_title", "OpenReview - VFX Review Sheet"))
+                self._prefs.pdf_studio_name = str(settings.value("pdf_studio_name", ""))
+                self._prefs.pdf_author_name = str(settings.value("pdf_author_name", ""))
+                self._prefs.pdf_logo_path = str(settings.value("pdf_logo_path", ""))
+                self._prefs.pdf_header_color = str(settings.value("pdf_header_color", "#c28a10"))
+                self._prefs.pdf_show_date = settings.value("pdf_show_date", True, type=bool)
+                self._prefs.pdf_show_fps = settings.value("pdf_show_fps", True, type=bool)
+                self._prefs.pdf_show_keyframe_count = settings.value("pdf_show_keyframe_count", True, type=bool)
+                self._prefs.pdf_page_size = str(settings.value("pdf_page_size", "letter"))
+                self._prefs.pdf_page_orientation = str(settings.value("pdf_page_orientation", "landscape"))
+                self._prefs.pdf_layout_mode = str(settings.value("pdf_layout_mode", "detailed_row"))
+                self._prefs.pdf_show_frame_num = settings.value("pdf_show_frame_num", True, type=bool)
+                self._prefs.pdf_show_timecode = settings.value("pdf_show_timecode", True, type=bool)
+                self._prefs.pdf_show_stroke_count = settings.value("pdf_show_stroke_count", True, type=bool)
+                self._prefs.pdf_show_notes = settings.value("pdf_show_notes", True, type=bool)
+                self._prefs.pdf_show_source_path = settings.value("pdf_show_source_path", True, type=bool)
             except Exception:
                 pass
         return self._prefs
 
     def save(self, prefs: Optional[UserPreferences] = None) -> None:
-        """Persist preferences to ~/.openreview/preferences.json and QSettings."""
+        """Persist preferences to preferences.json and QSettings."""
         if prefs is not None:
             self._prefs = prefs
 
@@ -195,7 +273,7 @@ class PreferencesManager(QObject):
             with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(asdict(self._prefs), f, indent=4)
         except Exception as e:
-            print(f"[PreferencesManager] Could not write JSON: {e}")
+            logger.warning("[PreferencesManager] Could not write JSON: %s", e)
 
         # Sync QSettings only for default user config
         if self._use_qsettings:
@@ -205,7 +283,7 @@ class PreferencesManager(QObject):
                     settings.setValue(k, v)
                 settings.sync()
             except Exception as e:
-                print(f"[PreferencesManager] Could not write QSettings: {e}")
+                logger.warning("[PreferencesManager] Could not write QSettings: %s", e)
 
         self.preferences_changed.emit(self._prefs)
 

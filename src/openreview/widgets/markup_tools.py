@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 from PySide6.QtCore import Qt, Signal, QPoint, QSize
-from PySide6.QtGui import QColor, QCursor, QIcon
+from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
     QWidget,
     QHBoxLayout,
@@ -42,7 +42,14 @@ class MarkupToolPalette(QFrame):
         self.setFixedHeight(42)
         self._current_tool: Optional[ShapeType] = None
         self._current_color: Tuple[int, int, int, int] = (255, 209, 59, 255)  # Vibrant Yellow (#ffd13b)
-        self._current_width: float = 5.0
+        try:
+            from openreview.core.preferences import PreferencesManager
+            prefs = PreferencesManager.instance().prefs
+            self._current_width: float = getattr(prefs, "default_brush_width", 6.0)
+            self._hud_opacity: float = getattr(prefs, "hud_opacity", 0.85)
+        except Exception:
+            self._current_width = 6.0
+            self._hud_opacity = 0.85
         self._current_opacity: float = 1.0
 
         # Dragging & layout state
@@ -52,13 +59,29 @@ class MarkupToolPalette(QFrame):
 
         self._setup_ui()
 
+    def set_hud_opacity(self, opacity: float) -> None:
+        """Set dark glass background opacity (0.3 to 1.0) with zero stylesheet re-parsing."""
+        new_op = max(0.3, min(1.0, float(opacity)))
+        if abs(self._hud_opacity - new_op) > 0.001:
+            self._hud_opacity = new_op
+            self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        """Render high-performance dark glass capsule background with antialiased rounded border."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        alpha = int(self._hud_opacity * 255)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        # Match floating HUD dark glass tint
+        painter.setBrush(QColor(26, 26, 26, alpha))
+        painter.setPen(QColor(68, 68, 68, 220))
+        painter.drawRoundedRect(rect, 10, 10)
+
     def _setup_ui(self) -> None:
         self.setStyleSheet("""
             QFrame#MarkupToolPalette {
-                background-color: rgba(18, 20, 26, 0.90);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-top: 1px solid rgba(255, 255, 255, 0.25);
-                border-radius: 10px;
+                background: transparent;
+                border: none;
             }
             QFrame#MarkupToolPalette > QPushButton {
                 min-width: 26px;
@@ -217,15 +240,16 @@ class MarkupToolPalette(QFrame):
         lbl_size_icon.setToolTip("Brush Stroke Width")
         layout.addWidget(lbl_size_icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
+        init_size = int(round(self._current_width))
         self.slider_size = QSlider(Qt.Orientation.Horizontal, self)
         self.slider_size.setRange(1, 32)
-        self.slider_size.setValue(5)
+        self.slider_size.setValue(init_size)
         self.slider_size.setFixedWidth(100)
         self.slider_size.setToolTip("Brush Stroke Width (1 - 32px)")
         self.slider_size.valueChanged.connect(self._on_size_slider_changed)
         layout.addWidget(self.slider_size, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.lbl_size = QLabel("5px", self)
+        self.lbl_size = QLabel(f"{init_size}px", self)
         self.lbl_size.setFixedWidth(26)
         self.lbl_size.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.lbl_size.setStyleSheet("color: #ffd13b; font-family: monospace; font-size: 10px; font-weight: bold;")
@@ -377,6 +401,12 @@ class MarkupToolPalette(QFrame):
         self._current_width = float(val)
         self.lbl_size.setText(f"{val}px")
         self.stroke_width_changed.emit(self._current_width)
+        try:
+            from openreview.core.preferences import PreferencesManager
+            PreferencesManager.instance().prefs.default_brush_width = self._current_width
+            PreferencesManager.instance().save()
+        except Exception:
+            pass
 
     def _on_opacity_slider_changed(self, val: int) -> None:
         self._current_opacity = float(val) / 100.0

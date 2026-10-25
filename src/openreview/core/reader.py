@@ -181,7 +181,7 @@ class PrefetchTask(QRunnable):
             return
 
         # Adaptive cooperative yield: guarantee main GUI thread & OpenGL event loop full CPU priority
-        time.sleep(0.002)
+        time.sleep(0.005)
 
         try:
             data = self.reader.read_frame(self.source_frame)
@@ -255,7 +255,7 @@ class BackgroundDiskCacheTask(QRunnable):
             return
 
         # Friendly cooperative sleep to guarantee UI thread and playback prefetch get full CPU priority
-        time.sleep(0.005)
+        time.sleep(0.008)
 
         try:
             if self.is_cancelled_fn and self.is_cancelled_fn():
@@ -378,7 +378,7 @@ class ReaderEngine(QObject):
         self._last_bg_progress_time: float = 0.0
         self._prefetch_chain_timer = QTimer(self)
         self._prefetch_chain_timer.setSingleShot(True)
-        self._prefetch_chain_timer.setInterval(30)
+        self._prefetch_chain_timer.setInterval(60)
         self._prefetch_chain_timer.timeout.connect(self._prefetch_next_batch)
 
         try:
@@ -393,9 +393,9 @@ class ReaderEngine(QObject):
             prefs = PreferencesManager.instance().prefs
             total_cores = os.cpu_count() or 4
             # Adaptive CPU reservation: reserve at least 2 cores for the UI & OpenGL rendering
-            default_threads = max(2, min(total_cores - 2, 6))
+            default_threads = max(1, min(total_cores - 2, 4))
             threads = getattr(prefs, "prefetch_worker_threads", default_threads)
-            self.thread_pool.setMaxThreadCount(max(2, min(int(threads), 6)))
+            self.thread_pool.setMaxThreadCount(max(1, min(int(threads), 4)))
         except Exception:
             self.thread_pool.setMaxThreadCount(2)
 

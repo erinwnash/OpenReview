@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Optional
 from PySide6.QtCore import Qt, QPoint, Signal, QRect
+from PySide6.QtGui import QPainter, QColor, QPaintEvent
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -48,6 +49,7 @@ class FloatingHUDCard(QFrame):
         self._resize_zone: str = "none"
         self._resize_start_pos: Optional[QPoint] = None
         self._resize_start_geom: Optional[QRect] = None
+        self._hud_opacity: float = 0.85
 
         self.setMouseTracking(True)
         self.setMinimumSize(180, 50)
@@ -55,13 +57,29 @@ class FloatingHUDCard(QFrame):
         self._enable_child_mouse_tracking(self)
         self.move(initial_pos)
 
+    def paintEvent(self, event: QPaintEvent) -> None:
+        """Render high-performance dark glass background with antialiased rounded border."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        alpha = int(self._hud_opacity * 255)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        painter.setBrush(QColor(26, 26, 26, alpha))
+        painter.setPen(QColor(68, 68, 68, 255))
+        painter.drawRoundedRect(rect, 4, 4)
+
+    def set_hud_opacity(self, opacity: float) -> None:
+        """Set floating HUD dark glass background opacity (0.3 to 1.0) with zero CSS recalculation overhead."""
+        new_op = max(0.3, min(1.0, float(opacity)))
+        if abs(self._hud_opacity - new_op) > 0.001:
+            self._hud_opacity = new_op
+            self.update()
+
     def _setup_ui(self) -> None:
         from openreview.ui.theme import get_spinbox_arrow_stylesheet
         self.setStyleSheet("""
             QFrame#floatingHUDCard {
-                background-color: rgba(26, 26, 26, 240);
-                border: 1px solid #444444;
-                border-radius: 4px;
+                background: transparent;
+                border: none;
             }
         """ + get_spinbox_arrow_stylesheet())
 
@@ -122,8 +140,7 @@ class FloatingHUDCard(QFrame):
 
         # Content Widget
         self._content_widget.setParent(self)
-        layout.addWidget(self._content_widget, 0)
-        layout.addStretch(1)
+        layout.addWidget(self._content_widget, 1)
 
         # Bottom SizeGrip Row (Right aligned)
         grip_bar = QHBoxLayout()

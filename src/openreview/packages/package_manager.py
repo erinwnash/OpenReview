@@ -7,16 +7,18 @@ from __future__ import annotations
 
 import os
 import sys
+import json
 import shutil
 import zipfile
 import logging
 import importlib.util
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Type
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, QSettings
 
 from openreview.packages.manifest import PackageManifest
 from openreview.packages.plugin_base import OpenReviewPlugin, PluginContext
+from openreview.core.preferences import get_app_config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -48,24 +50,53 @@ class PackageManager(QObject):
         self._enabled_packages: set[str] = set()
 
         u_dir = user_dir if user_dir is not None else user_packages_dir
-        self._user_packages_dir = Path(u_dir) if u_dir else (Path.home() / ".openreview" / "packages")
-        self._user_packages_dir.mkdir(parents=True, exist_ok=True)
+        self._user_packages_dir = Path(u_dir) if u_dir else (get_app_config_dir() / "packages")
+        try:
+            self._user_packages_dir.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as e:
+            logger.warning("Could not create user packages directory: %s", e)
 
         self._builtin_packages_dir = Path(builtin_packages_dir) if builtin_packages_dir else (Path(__file__).parent / "builtin")
-        self._builtin_packages_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._builtin_packages_dir.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as e:
+            logger.debug("Builtin packages dir not writable (normal if installed in Program Files): %s", e)
 
         self._state_file = self._user_packages_dir.parent / "package_state.json"
+        # Auto-migrate legacy state file if present
+        legacy_state = Path.home() / ".openreview" / "package_state.json"
+        if legacy_state.is_file() and not self._state_file.is_file():
+            try:
+                self._state_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(legacy_state, self._state_file)
+            except Exception as e:
+                logger.debug("Failed migrating legacy package state: %s", e)
+
         self._load_state()
 
     def _load_state(self) -> None:
         try:
             if hasattr(self, "_state_file") and self._state_file.is_file():
                 with open(self._state_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self._disabled_packages.update(data.get("disabled", []))
-                    self._enabled_packages.update(data.get("enabled", []))
+                    content = f.read().strip()
+                    if content:
+                        data = json.loads(content)
+                        self._disabled_packages.update(data.get("disabled", []))
+                        self._enabled_packages.update(data.get("enabled", []))
         except Exception as e:
-            logger.warning("Failed to load package state: %s", e)
+            logger.warning("Failed to load package state from file: %s", e)
+
+        # Fallback / sync from QSettings on Windows / cross-platform
+        try:
+            settings = QSettings("OpenReview", "OpenReview")
+            q_dis = settings.value("packages/disabled", [])
+            q_ena = settings.value("packages/enabled", [])
+            if isinstance(q_dis, list):
+                self._disabled_packages.update(q_dis)
+            if isinstance(q_ena, list):
+                self._enabled_packages.update(q_ena)
+        except Exception as e:
+            logger.debug("Failed to load package state from QSettings: %s", e)
 
     def _save_state(self) -> None:
         try:
@@ -77,7 +108,16 @@ class PackageManager(QObject):
                         "enabled": sorted(list(self._enabled_packages)),
                     }, f, indent=2)
         except Exception as e:
-            logger.warning("Failed to save package state: %s", e)
+            logger.warning("Failed to save package state to file: %s", e)
+
+        # Mirror into QSettings for resilience on Windows
+        try:
+            settings = QSettings("OpenReview", "OpenReview")
+            settings.setValue("packages/disabled", sorted(list(self._disabled_packages)))
+            settings.setValue("packages/enabled", sorted(list(self._enabled_packages)))
+            settings.sync()
+        except Exception as e:
+            logger.debug("Failed to mirror package state to QSettings: %s", e)
 
     @classmethod
     def instance(cls, main_window: Optional[Any] = None) -> PackageManager:

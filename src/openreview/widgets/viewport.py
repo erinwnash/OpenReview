@@ -99,6 +99,7 @@ class ViewportCanvas(QOpenGLWidget):
     resolution_changed = Signal(int, int)  # width, height
     file_dropped = Signal(str)  # dropped local file or folder path
     files_dropped = Signal(list)  # list of dropped local paths
+    files_dropped_target = Signal(list, str, list)  # (paths: list[str], target: "stack" | "bin", source_ids: list[str])
     wipe_position_changed = Signal(float)  # 0.0 to 1.0 interactive wipe split position
     wipe_angle_changed = Signal(float)  # 0.0 to 360.0 interactive wipe rotation angle
     scrub_requested = Signal(int)  # delta frame scrub steps
@@ -143,6 +144,8 @@ class ViewportCanvas(QOpenGLWidget):
         self._is_wiping = False
         self._is_rotating_wipe = False
         self._wipe_drag_start_angle = 0.0
+        self._drag_overlay_active: bool = False
+        self._drag_target: Optional[str] = None
         self._wipe_start_wipe_angle = 0.0
         self._wipe_hover_part: Optional[str] = None
         self._wipe_handle_center = QPointF(0, 0)
@@ -171,7 +174,10 @@ class ViewportCanvas(QOpenGLWidget):
         self._active_draw_tool: Optional[ShapeType] = None
         self._active_draw_color: Tuple[int, int, int, int] = (229, 168, 35, 255)
         self._base_draw_color: Tuple[int, int, int] = (229, 168, 35)
-        self._active_draw_width: float = 3.0
+        try:
+            self._active_draw_width: float = getattr(PreferencesManager.instance().prefs, "default_brush_width", 6.0)
+        except Exception:
+            self._active_draw_width = 6.0
         self._active_draw_opacity: float = 1.0
         self._current_stroke_points: list[Tuple[float, float]] = []
 
@@ -671,6 +677,8 @@ class ViewportCanvas(QOpenGLWidget):
                     self._paint_info_strip(painter)
             if self._toast_message:
                 self._paint_hud_toast(painter)
+            if self._drag_overlay_active:
+                self._paint_drag_drop_overlay(painter)
         finally:
             painter.end()
 
@@ -1133,6 +1141,15 @@ class ViewportCanvas(QOpenGLWidget):
             px_type = QOpenGLTexture.PixelType.Float16
             arr = self._image_a if self._image_a.dtype == np.float16 else self._image_a.astype(np.float16, copy=False)
 
+        if arr.ndim == 3 and arr.shape[2] == 3:
+            if arr.dtype == np.uint8:
+                alpha = np.full((h, w, 1), 255, dtype=np.uint8)
+            elif arr.dtype == np.float16:
+                alpha = np.ones((h, w, 1), dtype=np.float16)
+            else:
+                alpha = np.ones((h, w, 1), dtype=np.float32)
+            arr = np.concatenate([arr, alpha], axis=2)
+
         prefs = PreferencesManager.instance().prefs
         use_proxy = (getattr(prefs, "fast_playback_laptop_mode", False) or PreferencesManager.instance().is_low_spec_gpu()) and getattr(self, "_is_playing", False)
         if use_proxy and (w > 2048 or h > 1200):
@@ -1202,6 +1219,15 @@ class ViewportCanvas(QOpenGLWidget):
             tex_fmt = QOpenGLTexture.TextureFormat.RGBA16F
             px_type = QOpenGLTexture.PixelType.Float16
             arr = self._image_b if self._image_b.dtype == np.float16 else self._image_b.astype(np.float16, copy=False)
+
+        if arr.ndim == 3 and arr.shape[2] == 3:
+            if arr.dtype == np.uint8:
+                alpha = np.full((h, w, 1), 255, dtype=np.uint8)
+            elif arr.dtype == np.float16:
+                alpha = np.ones((h, w, 1), dtype=np.float16)
+            else:
+                alpha = np.ones((h, w, 1), dtype=np.float32)
+            arr = np.concatenate([arr, alpha], axis=2)
 
         prefs = PreferencesManager.instance().prefs
         use_proxy = (getattr(prefs, "fast_playback_laptop_mode", False) or PreferencesManager.instance().is_low_spec_gpu()) and getattr(self, "_is_playing", False)
@@ -1283,6 +1309,11 @@ class ViewportCanvas(QOpenGLWidget):
         if frame_number != self.current_frame and hasattr(self, "_text_editor") and self._text_editor.is_active():
             self._text_editor.commit()
         self.current_frame = frame_number
+        if isinstance(image_data, (tuple, list)):
+            if len(image_data) >= 2 and isinstance(image_data[1], np.ndarray):
+                self._image_b = image_data[1]
+                self._pending_upload_b = True
+            image_data = next((x for x in image_data if isinstance(x, np.ndarray)), None)
         self._image_a = image_data
         if image_data is not None and hasattr(image_data, "shape") and len(image_data.shape) >= 2:
             self.has_active_media = True
@@ -1308,6 +1339,15 @@ class ViewportCanvas(QOpenGLWidget):
                 self._refresh_all_samplers()
         self.update()
 
+    def set_media_resolution(self, w: int, h: int) -> None:
+        """Update viewport media resolution."""
+        if w > 0 and h > 0:
+            if w != self._img_width or h != self._img_height:
+                self._img_width = int(w)
+                self._img_height = int(h)
+                self.resolution_changed.emit(self._img_width, self._img_height)
+                self.update()
+
     def clear_canvas(self) -> None:
         """Clear all active textures, images, and reset canvas to empty state."""
         self._image_a = None
@@ -1330,6 +1370,8 @@ class ViewportCanvas(QOpenGLWidget):
         self.update()
 
     def set_reference_frame(self, image_data: Optional[np.ndarray]) -> None:
+        if isinstance(image_data, (tuple, list)):
+            image_data = next((x for x in image_data if isinstance(x, np.ndarray)), None)
         self._image_b = image_data
         self._pending_upload_b = True if image_data is not None else False
         self.update()
@@ -1637,6 +1679,8 @@ class ViewportCanvas(QOpenGLWidget):
         from openreview.core.exporter import MediaExporter
         target_f = frame_num if frame_num is not None else self.current_frame
         strokes = self.annotation_store.get_strokes(target_f)
+        if isinstance(self._image_a, (tuple, list)):
+            self._image_a = next((x for x in self._image_a if isinstance(x, np.ndarray)), None)
         if self._image_a is None:
             return np.zeros((1080, 1920, 3), dtype=np.uint8)
 
@@ -2641,36 +2685,86 @@ class ViewportCanvas(QOpenGLWidget):
         event.accept()
 
     # --------------------------------------------------------------------------
-    # Drag-and-Drop Sequence Loading
+    # Drag-and-Drop Sequence Loading & Split Overlay
     # --------------------------------------------------------------------------
+    def _is_accepted_drag_event(self, event) -> bool:
+        mime = event.mimeData()
+        if not mime:
+            return False
+        if mime.hasUrls() or mime.hasText() or mime.hasFormat("application/x-openreview-source-ids"):
+            return True
+        if event.source() is not None:
+            return True
+        return False
+
     def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if self._is_accepted_drag_event(event):
             event.acceptProposedAction()
+            self._drag_overlay_active = True
+            pos_y = event.position().y() if hasattr(event, "position") else event.pos().y()
+            self._drag_target = "stack" if pos_y < (self.height() / 2.0) else "bin"
+            self.update()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event) -> None:
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if self._is_accepted_drag_event(event):
             event.acceptProposedAction()
+            self._drag_overlay_active = True
+            pos_y = event.position().y() if hasattr(event, "position") else event.pos().y()
+            new_target = "stack" if pos_y < (self.height() / 2.0) else "bin"
+            if new_target != self._drag_target:
+                self._drag_target = new_target
+                self.update()
         else:
             super().dragMoveEvent(event)
 
-    def dropEvent(self, event) -> None:
-        paths = []
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
-        elif event.mimeData().hasText():
-            t = event.mimeData().text().strip()
-            if os.path.exists(t):
-                paths = [t]
+    def dragLeaveEvent(self, event) -> None:
+        if self._drag_overlay_active:
+            self._drag_overlay_active = False
+            self._drag_target = None
+            self.update()
+        super().dragLeaveEvent(event)
 
-        if paths:
+    def dropEvent(self, event) -> None:
+        pos_y = event.position().y() if hasattr(event, "position") else event.pos().y()
+        target = self._drag_target or ("stack" if pos_y < (self.height() / 2.0) else "bin")
+        self._drag_overlay_active = False
+        self._drag_target = None
+        self.update()
+
+        paths: list[str] = []
+        source_ids: list[str] = []
+
+        mime = event.mimeData()
+        if mime:
+            if mime.hasFormat("application/x-openreview-source-ids"):
+                try:
+                    import json
+                    raw_sids = bytes(mime.data("application/x-openreview-source-ids")).decode("utf-8")
+                    source_ids = json.loads(raw_sids)
+                except Exception:
+                    pass
+
+            if mime.hasUrls():
+                urls = mime.urls()
+                paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
+            elif mime.hasText():
+                t = mime.text().strip()
+                if os.path.exists(t):
+                    paths = [t]
+
+        if paths or source_ids:
             event.acceptProposedAction()
             # Decouple asynchronously so Windows OLE immediately releases drag cursor without freezing
-            QTimer.singleShot(0, lambda p=paths: self.files_dropped.emit(p))
+            QTimer.singleShot(0, lambda p=paths, t=target, s=source_ids: self._emit_drop(p, t, s))
         else:
             super().dropEvent(event)
+
+    def _emit_drop(self, paths: list[str], target: str, source_ids: list[str]) -> None:
+        self.files_dropped_target.emit(paths, target, source_ids)
+        if paths:
+            self.files_dropped.emit(paths)
 
     # --------------------------------------------------------------------------
     # Markup Overlay Painting
@@ -2869,6 +2963,10 @@ class ViewportCanvas(QOpenGLWidget):
 
     def set_draw_width(self, width: float) -> None:
         self._active_draw_width = max(1.0, float(width))
+        try:
+            PreferencesManager.instance().prefs.default_brush_width = self._active_draw_width
+        except Exception:
+            pass
         self.update()
 
     def set_draw_opacity(self, opacity: float) -> None:
@@ -3271,6 +3369,61 @@ class ViewportCanvas(QOpenGLWidget):
 
         painter.setPen(QColor(240, 240, 240))
         painter.drawText(bg_rect, Qt.AlignmentFlag.AlignCenter, self._toast_message)
+        painter.restore()
+
+    def _paint_drag_drop_overlay(self, painter: QPainter) -> None:
+        """Render horizontal split overlay (Top: Add Media to stack, Bottom: Add to source bin)."""
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        vw = self.width()
+        vh = self.height()
+
+        # Canvas veil dimming background
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 140))
+
+        margin_x = max(24.0, vw * 0.05)
+        margin_y = max(20.0, vh * 0.05)
+        gap = 16.0
+
+        card_w = max(120.0, vw - 2.0 * margin_x)
+        card_h = max(60.0, (vh - 2.0 * margin_y - gap) / 2.0)
+
+        top_rect = QRectF(margin_x, margin_y, card_w, card_h)
+        bottom_rect = QRectF(margin_x, margin_y + card_h + gap, card_w, card_h)
+        corner_radius = 12.0
+
+        is_top_active = (self._drag_target == "stack")
+        is_bottom_active = (self._drag_target == "bin")
+
+        font_size = max(13, min(22, int(card_h * 0.16)))
+        font_title = QFont("Segoe UI", font_size, QFont.Weight.DemiBold)
+        painter.setFont(font_title)
+
+        # 1. Top Card: Add Media to the stack
+        if is_top_active:
+            painter.setBrush(QColor(36, 32, 22, 240))
+            painter.setPen(QPen(QColor(245, 158, 11, 255), 2.0))
+        else:
+            painter.setBrush(QColor(22, 22, 22, 215))
+            painter.setPen(QPen(QColor(85, 85, 85, 180), 1.2))
+        painter.drawRoundedRect(top_rect, corner_radius, corner_radius)
+
+        painter.setPen(QColor(255, 255, 255, 255) if is_top_active else QColor(190, 190, 190, 210))
+        painter.drawText(top_rect, Qt.AlignmentFlag.AlignCenter, "Add Media to the stack")
+
+        # 2. Bottom Card: Just add the media to source bin
+        if is_bottom_active:
+            painter.setBrush(QColor(36, 32, 22, 240))
+            painter.setPen(QPen(QColor(245, 158, 11, 255), 2.0))
+        else:
+            painter.setBrush(QColor(22, 22, 22, 215))
+            painter.setPen(QPen(QColor(85, 85, 85, 180), 1.2))
+        painter.drawRoundedRect(bottom_rect, corner_radius, corner_radius)
+
+        painter.setPen(QColor(255, 255, 255, 255) if is_bottom_active else QColor(190, 190, 190, 210))
+        painter.drawText(bottom_rect, Qt.AlignmentFlag.AlignCenter, "Just add the media to source bin")
+
         painter.restore()
 
     # --------------------------------------------------------------------------

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import math
 import colorsys
 import logging
 from pathlib import Path
@@ -215,10 +216,10 @@ class MainWindow(QMainWindow):
         self._delayed_cache_timer.setInterval(1000)
         self._delayed_cache_timer.timeout.connect(self._trigger_prefetch)
 
-        # Coalesced Cache UI Update Timer (~15 FPS to avoid Qt event queue saturation)
+        # Coalesced Cache UI Update Timer (~10 FPS to avoid Qt event queue saturation)
         self._cache_ui_timer = QTimer(self)
         self._cache_ui_timer.setSingleShot(True)
-        self._cache_ui_timer.setInterval(66)
+        self._cache_ui_timer.setInterval(100)
         self._cache_ui_timer.timeout.connect(self._on_cache_updated)
 
         # Scrub Settle Timer (dedicates 100% CPU during active dragging)
@@ -543,6 +544,7 @@ class MainWindow(QMainWindow):
         self.hud_layers.hide()
         self.hud_stereo.hide()
         self.hud_ocio.hide()
+        self._apply_hud_opacity(getattr(self.pref_mgr.prefs, "hud_opacity", 0.85))
 
     def _setup_status_bar(self) -> None:
         status = self.statusBar()
@@ -1596,6 +1598,10 @@ class MainWindow(QMainWindow):
         if hasattr(self.timeline, "cache_mode_selected"):
             self.timeline.cache_mode_selected.connect(self._on_set_cache_mode)
         self.timeline.audio_clicked.connect(self._on_open_audio_settings)
+        self.timeline.clear_cache_requested.connect(self._on_clear_all_cache)
+        self.timeline.clear_annotations_requested.connect(
+            lambda: (self.viewport.update(), self.statusBar().showMessage("All annotations cleared.", 3000))
+        )
 
         # Top Bar -> Viewport
         self.top_bar.gain_changed.connect(self._on_gain_changed)
@@ -1652,7 +1658,7 @@ class MainWindow(QMainWindow):
         self.viewport.wipe_angle_changed.connect(self.wipe_widget.update_wipe_angle)
 
         # Viewport Drag-and-Drop file loading
-        self.viewport.files_dropped.connect(self._on_files_dropped)
+        self.viewport.files_dropped_target.connect(self._on_viewport_files_dropped_target)
 
         # Playback Clock Shuttle Speed changes
         self.clock.shuttle_speed_changed.connect(self._on_shuttle_speed_changed)
@@ -1692,8 +1698,12 @@ class MainWindow(QMainWindow):
     # --------------------------------------------------------------------------
     # Event Handlers & Core Updates
     # --------------------------------------------------------------------------
-    def _normalize_frame_data(self, data: Optional[np.ndarray]) -> Optional[np.ndarray]:
-        if data is None or not isinstance(data, np.ndarray):
+    def _normalize_frame_data(self, data: Optional[np.ndarray | tuple]) -> Optional[np.ndarray | tuple]:
+        if data is None:
+            return None
+        if isinstance(data, (tuple, list)):
+            return tuple(self._normalize_frame_data(x) for x in data)
+        if not isinstance(data, np.ndarray):
             return data
         if data.dtype == np.float32:
             return data.astype(np.float16, copy=False)
@@ -1919,6 +1929,16 @@ class MainWindow(QMainWindow):
         # Trigger prefetching if caching is enabled
         self._trigger_prefetch()
 
+        # Update source details HUD if visible (throttled during continuous playback)
+        if hasattr(self, "hud_source_details") and hasattr(self, "source_details_widget") and self.hud_source_details.isVisible():
+            import time
+            now = time.time()
+            is_playing = getattr(self.clock, "is_playing", False)
+            last_update = getattr(self, "_last_source_details_update", 0.0)
+            if not is_playing or (now - last_update >= 0.15):
+                self._last_source_details_update = now
+                self.source_details_widget.update_info(self._get_current_source_info())
+
     def _resolve_timeline_frame_sources(self, timeline_frame: int) -> list[tuple[Optional[str], int, Optional[Any]]]:
         """Decompose an upcoming timeline frame into its underlying source items, frames, and readers."""
         viewable = self.session_graph.get_active_viewable() if hasattr(self, "session_graph") else None
@@ -2016,9 +2036,9 @@ class MainWindow(QMainWindow):
         self._trigger_prefetch()
 
     def _schedule_cache_ui_update(self) -> None:
-        """Coalesce rapid cache frame events to ~15 FPS so the main UI event loop is never flooded."""
+        """Coalesce rapid cache frame events to ~10 FPS so the main UI event loop is never flooded."""
         if hasattr(self, "_cache_ui_timer") and not self._cache_ui_timer.isActive():
-            self._cache_ui_timer.start(66)
+            self._cache_ui_timer.start(100)
 
     def _on_frame_ready(self, frame: int) -> None:
         if frame == self.clock.current_frame:
@@ -2109,8 +2129,12 @@ class MainWindow(QMainWindow):
         )
         disk_info = f" | Disk: {d_used_mb:.0f}MB" if d_used_mb > 0 else ""
         if self.cache.mode == CacheMode.OFF:
-            self.cache_status_label.setText("Cache: OFF")
-            self.cache_status_label.setStyleSheet("color: #888888; font-family: monospace;")
+            if used_mb > 0 or d_used_mb > 0:
+                self.cache_status_label.setText(f"Cache: Paused [{used_mb:.1f}MB]{disk_info} (Shift+C)")
+                self.cache_status_label.setStyleSheet("color: #e67e22; font-family: monospace;")
+            else:
+                self.cache_status_label.setText("Cache: OFF")
+                self.cache_status_label.setStyleSheet("color: #888888; font-family: monospace;")
         elif not getattr(self, "_cache_started", False):
             mode_tags = {
                 CacheMode.PLAY_AHEAD: "Ahead",
@@ -2172,13 +2196,22 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Cache Mode: {mode_names.get(mode, str(mode))}", 3000)
 
     def _on_toggle_cache(self) -> None:
-        """Toggle between Cache active/OFF, starting In/Out region cache mode (Shift+C)."""
+        """Toggle between Cache active/OFF, resuming the last active cache mode (Shift+C)."""
         if not getattr(self, "_cache_started", False) or self.cache.mode == CacheMode.OFF:
-            self._on_set_cache_mode(CacheMode.REGION, start_prefetch=True)
-            self.statusBar().showMessage("RAM Caching Started [In/Out Region].", 3000)
+            target_mode = getattr(self, "_last_active_cache_mode", None) or CacheMode.REGION
+            self._on_set_cache_mode(target_mode, start_prefetch=True)
+            mode_names = {
+                CacheMode.PLAY_AHEAD: "Play-Ahead",
+                CacheMode.REGION: "In/Out Region",
+                CacheMode.ALL: "Full Sequence",
+            }
+            lbl = mode_names.get(target_mode, "Active")
+            self.statusBar().showMessage(f"Caching Resumed [{lbl}]. Pre-cached data retained.", 3000)
         else:
+            if self.cache.mode != CacheMode.OFF:
+                self._last_active_cache_mode = self.cache.mode
             self._on_set_cache_mode(CacheMode.OFF)
-            self.statusBar().showMessage("RAM Caching Turned OFF (Shift+C to enable).", 3000)
+            self.statusBar().showMessage("Caching Paused. Pre-cached data retained (Shift+C to resume).", 3000)
 
     def _on_cycle_cache_mode(self) -> None:
         """Cycle through cache modes when clicking the compact cache bar."""
@@ -2402,6 +2435,7 @@ class MainWindow(QMainWindow):
                 if hasattr(self, "sources_dock"):
                     self.sources_dock.panel.refresh_tree()
                     self.sources_dock.panel._refresh_subpanels()
+                self._refresh_active_source_details()
             elif hasattr(self, "comp_qc_state") and self.comp_qc_state and self.comp_qc_state.source_plate_path and self.comp_qc_state.source_item_id:
                 qc_sid = self.comp_qc_state.source_item_id
                 cur_id = viewable.id if (viewable and hasattr(viewable, "id")) else None
@@ -2450,6 +2484,7 @@ class MainWindow(QMainWindow):
                 if hasattr(self, "sources_dock"):
                     self.sources_dock.panel.refresh_tree()
                     self.sources_dock.panel._refresh_subpanels()
+                self._refresh_active_source_details()
             elif hasattr(self, "comp_qc_state") and self.comp_qc_state and self.comp_qc_state.source_plate_path and self.comp_qc_state.source_item_id:
                 qc_sid = self.comp_qc_state.source_item_id
                 cur_id = viewable.id if (viewable and hasattr(viewable, "id")) else None
@@ -2776,6 +2811,82 @@ class MainWindow(QMainWindow):
         )
         dlg._on_import_clicked()
 
+    def _composite_comparison_pair(self, da: np.ndarray, db: np.ndarray) -> np.ndarray:
+        """Composite two frame arrays (Layer A and Layer B) matching the active comparison mode."""
+        if da is None:
+            return db if db is not None else np.zeros((1080, 1920, 3), dtype=np.uint8)
+        if db is None:
+            return da
+
+        try:
+            ha, wa = da.shape[:2]
+            hb, wb = db.shape[:2]
+            if (ha, wa) != (hb, wb):
+                from openreview.core.exporter import MediaExporter
+                db = MediaExporter.resize_frame(db, wa, ha)
+
+            mode = getattr(self.viewport.comparison_state, "mode", ComparisonMode.OFF)
+            if mode == ComparisonMode.OFF:
+                return da
+
+            a_f = da.astype(np.float32) / (255.0 if da.dtype == np.uint8 else 1.0)
+            b_f = db.astype(np.float32) / (255.0 if db.dtype == np.uint8 else 1.0)
+
+            if a_f.ndim == 2:
+                a_f = np.repeat(a_f[:, :, np.newaxis], 3, axis=2)
+            if b_f.ndim == 2:
+                b_f = np.repeat(b_f[:, :, np.newaxis], 3, axis=2)
+
+            if a_f.shape[2] == 3:
+                a_f = np.concatenate([a_f, np.ones((ha, wa, 1), dtype=np.float32)], axis=2)
+            if b_f.shape[2] == 3:
+                b_f = np.concatenate([b_f, np.ones((ha, wa, 1), dtype=np.float32)], axis=2)
+
+            comp_res = None
+            if mode == ComparisonMode.DIFFERENCE:
+                diff_boost = float(getattr(self.viewport.comparison_state, "diff_boost", 1.0))
+                comp_res = np.abs(a_f[:, :, :3] - b_f[:, :, :3]) * diff_boost
+            elif mode == ComparisonMode.DIFFERENCE_INVERTED:
+                diff_boost = float(getattr(self.viewport.comparison_state, "diff_boost", 1.0))
+                comp_res = 1.0 - (np.abs(a_f[:, :, :3] - b_f[:, :, :3]) * diff_boost)
+            elif mode == ComparisonMode.ADD:
+                comp_res = a_f[:, :, :3] + b_f[:, :, :3]
+            elif mode == ComparisonMode.OVER:
+                stack_mix = float(getattr(self.viewport.comparison_state, "stack_mix", 1.0))
+                alpha = a_f[:, :, 3:4] * stack_mix
+                comp_res = a_f[:, :, :3] * alpha + b_f[:, :, :3] * (1.0 - alpha)
+            elif mode in (ComparisonMode.WIPE, ComparisonMode.SPLIT):
+                wipe_pos = float(getattr(self.viewport.comparison_state, "wipe_position", 0.5))
+                wipe_angle = float(getattr(self.viewport.comparison_state, "wipe_angle_deg", 0.0))
+                wc = getattr(self.viewport.comparison_state, "wipe_center", (0.5, 0.5))
+                y_coords, x_coords = np.mgrid[0:ha, 0:wa]
+                norm_x = (x_coords.astype(np.float32) + 0.5) / float(wa)
+                norm_y = (y_coords.astype(np.float32) + 0.5) / float(ha)
+                rad = math.radians(wipe_angle)
+                nx = math.cos(rad)
+                ny = math.sin(rad)
+                dist = (norm_x - wc[0]) * nx + (norm_y - wc[1]) * ny
+                mask = (dist <= (wipe_pos - 0.5))[:, :, np.newaxis]
+                comp_res = np.where(mask, a_f[:, :, :3], b_f[:, :, :3])
+            else:
+                comp_res = a_f[:, :, :3]
+
+            comp_res = np.clip(comp_res, 0.0, 1.0)
+            if da.dtype == np.uint8:
+                return (comp_res * 255.0).astype(np.uint8)
+            return comp_res.astype(da.dtype)
+        except Exception:
+            return da
+
+    def _resolve_frame_from_tuple(self, raw_tuple: tuple | list) -> np.ndarray:
+        """Resolve a tuple of frame buffers into a single 2D/3D numpy array."""
+        arrays = [x for x in raw_tuple if isinstance(x, np.ndarray)]
+        if not arrays:
+            return np.zeros((1080, 1920, 3), dtype=np.uint8)
+        if len(arrays) == 1:
+            return arrays[0]
+        return self._composite_comparison_pair(arrays[0], arrays[1])
+
     def _render_frame_for_export(self, frame_num: int) -> np.ndarray:
         """Render a specific frame with annotations at native source frame resolution."""
         raw = None
@@ -2797,6 +2908,44 @@ class MainWindow(QMainWindow):
                     if raw is None:
                         r = self._get_reader_for_source(src)
                         raw = r.read_frame(sf) if r else None
+            elif isinstance(viewable, StackView):
+                is_switch_layer_b = (viewable.compare_mode == "switch" and viewable.current_layer_index == viewable.index_b)
+                if is_switch_layer_b:
+                    layer_b = viewable.get_layer_b(self.session_graph.sources)
+                    if layer_b:
+                        raw = self.cache.get_source_frame(layer_b.id, frame_num)
+                        if raw is None:
+                            rb = self._get_reader_for_source(layer_b)
+                            raw = rb.read_frame(frame_num) if rb else None
+                else:
+                    layer_a = viewable.get_layer_a(self.session_graph.sources)
+                    layer_b = viewable.get_layer_b(self.session_graph.sources)
+                    da = None
+                    db = None
+                    if layer_a:
+                        da = self.cache.get_source_frame(layer_a.id, frame_num)
+                        if da is None:
+                            ra = self._get_reader_for_source(layer_a)
+                            da = ra.read_frame(frame_num) if ra else None
+                    if layer_b:
+                        db = self.cache.get_source_frame(layer_b.id, frame_num)
+                        if db is None:
+                            rb = self._get_reader_for_source(layer_b)
+                            db = rb.read_frame(frame_num) if rb else None
+                    if da is not None and db is not None and self.viewport.comparison_state.mode != ComparisonMode.OFF:
+                        raw = self._composite_comparison_pair(da, db)
+                    else:
+                        raw = da if da is not None else db
+            elif isinstance(viewable, LayoutView):
+                def _fetch_tile(src: SourceItem):
+                    sf = viewable.resolve_tile_frame(src, frame_num, self.session_graph.sources)
+                    d = self.cache.get_source_frame(src.id, sf)
+                    if d is None:
+                        r = self._get_reader_for_source(src)
+                        d = r.read_frame(sf) if r else None
+                    return d
+                raw = composite_layout_grid(viewable, self.session_graph.sources, _fetch_tile)
+
         if raw is None and self.reader:
             raw = self.reader.read_frame(frame_num)
         if raw is None:
@@ -2804,6 +2953,9 @@ class MainWindow(QMainWindow):
                 raw = self.viewport._image_a
             else:
                 raw = np.zeros((1080, 1920, 3), dtype=np.uint8)
+
+        if isinstance(raw, (tuple, list)):
+            raw = self._resolve_frame_from_tuple(raw)
 
         from openreview.core.exporter import MediaExporter
         base_rgb = MediaExporter.apply_screenspace_color_transforms(raw, self.viewport)
@@ -3295,8 +3447,11 @@ class MainWindow(QMainWindow):
         """Atomically clear all session state, media, caches, background workers, and UI panels."""
         self._suppress_in_out_record = True
 
-        # 1. Stop playback
+        # 1. Stop playback and pause/unload audio
         self.clock.pause()
+        if hasattr(self, "audio_engine") and self.audio_engine:
+            self.audio_engine.unload_audio()
+            self.audio_engine.reset_offsets()
 
         # 2. Cancel and drain background prefetching and secondary background caching
         if hasattr(self, "reader_engine") and self.reader_engine:
@@ -3308,7 +3463,13 @@ class MainWindow(QMainWindow):
 
         self.reader = None
 
-        # 3. Clear RAM and Disk caches and timeline indicators
+        # 3. Clear Session Graph and sources BEFORE resetting clock so frame change events cannot reload media
+        if hasattr(self, "_source_readers"):
+            self._source_readers.clear()
+        if hasattr(self, "session_graph") and self.session_graph:
+            self.session_graph.clear()
+
+        # 4. Clear RAM and Disk caches and timeline indicators
         if hasattr(self, "cache") and self.cache:
             self.cache.clear()
             self.cache.set_active_source(None)
@@ -3317,46 +3478,55 @@ class MainWindow(QMainWindow):
                 set(), 0.0, cache_mode=self.cache.mode.value if hasattr(self, "cache") else "off"
             )
 
-        # 4. Clear Viewport Canvas completely
-        if hasattr(self, "viewport") and self.viewport:
-            self.viewport.clear_canvas()
-            self.viewport.reset_transforms()
-            self.viewport.set_matte(None)
-            self.viewport.set_background_mode("black")
-            self.viewport.set_reference_frame(None)
-
-        # 5. Clear Annotations, Marks, Audio & State
-        if hasattr(self, "annotation_store") and self.annotation_store:
-            self.annotation_store.clear_all()
+        # 5. Reset Clock without triggering spurious frame decode signals
         if hasattr(self, "clock") and self.clock:
+            was_blocked = self.clock.blockSignals(True)
             self.clock.clear_all_bookmarks()
             self.clock.set_range(1001, 1200, reset_in_out=True)
             self.clock.set_frame(1001)
+            self.clock.blockSignals(was_blocked)
 
-        # 6. Reset Top Bar Controls
+        if hasattr(self, "timeline") and self.timeline:
+            self.timeline._on_range_changed(1001, 1200)
+            self.timeline._on_frame_changed(1001)
+            self.timeline.update()
+
+        # 6. Clear Annotations, Marks & State
+        if hasattr(self, "annotation_store") and self.annotation_store:
+            self.annotation_store.clear_all()
+        if hasattr(self, "annotation_manager_widget") and self.annotation_manager_widget:
+            self.annotation_manager_widget.refresh_table()
+
+        # 7. Reset comparison state
+        if hasattr(self, "comparison_state") and self.comparison_state:
+            self.comparison_state.reset()
+
+        # 8. Clear Viewport Canvas completely (textures, primary frame, reference frame, matte)
+        if hasattr(self, "viewport") and self.viewport:
+            if hasattr(self, "comparison_state") and self.comparison_state:
+                self.viewport.comparison_state = self.comparison_state
+            self.viewport.clear_canvas()
+            self.viewport.set_primary_frame(0, None)
+            self.viewport.set_reference_frame(None)
+            self.viewport.reset_transforms()
+            self.viewport.set_matte(None)
+            self.viewport.set_background_mode("black")
+            self.viewport.set_contact_sheet_mode(False, None)
+            self.viewport.update()
+
+        # 9. Reset Top Bar Controls
         if hasattr(self, "top_bar") and self.top_bar:
             self.top_bar.reset_exposure()
             self.top_bar.reset_gamma()
             self.top_bar.set_channel_mode(0)
 
-        # 7. Unload Audio
-        if hasattr(self, "audio_engine") and self.audio_engine:
-            self.audio_engine.unload_audio()
-            self.audio_engine.reset_offsets()
+        # 10. Clear UI widgets & inspectors
+        if hasattr(self, "hist_widget") and self.hist_widget:
+            self.hist_widget.update_frame(None)
+        if hasattr(self, "hud_notes_editor") and self.hud_notes_editor:
+            self.hud_notes_editor.clear()
 
-        # 8. Reset comparison state
-        if hasattr(self, "comparison_state") and self.comparison_state:
-            self.comparison_state.reset()
-            if hasattr(self, "viewport") and self.viewport:
-                self.viewport.comparison_state = self.comparison_state
-                self.viewport.update()
-
-        # 9. Clear Session Graph and Sources panel
-        if hasattr(self, "session_graph") and self.session_graph:
-            self.session_graph.clear()
-        if hasattr(self, "_source_readers"):
-            self._source_readers.clear()
-
+        # 11. Clear Sources Dock and panel
         if hasattr(self, "sources_dock") and self.sources_dock:
             panel = self.sources_dock.panel
             panel.tree.clear()
@@ -3374,8 +3544,6 @@ class MainWindow(QMainWindow):
         self._current_stereo_pair = None
         self._is_exr_contact_sheet_active = False
         self._exr_contact_sheet_tile_map.clear()
-        if hasattr(self, "viewport") and self.viewport:
-            self.viewport.set_contact_sheet_mode(False, None)
         if hasattr(self, "layers_widget"):
             self.layers_widget.set_contact_sheet_active(False)
             self.layers_widget.refresh_list(["beauty"])
@@ -3589,6 +3757,102 @@ class MainWindow(QMainWindow):
                 note = self.annotation_store.get_frame_note(frame)
                 if note:
                     self.sync_engine.broadcast_note(frame, note)
+
+    def _on_viewport_files_dropped_target(
+        self,
+        paths: list[str],
+        target: str,
+        source_ids: Optional[list[str]] = None,
+    ) -> None:
+        if not paths and not source_ids:
+            return
+
+        if not hasattr(self, "session_graph"):
+            if paths:
+                self._on_files_dropped(paths)
+            return
+
+        # ----------------------------------------------------------------------
+        # Target: "bin" (Just add the media to source bin and do nothing)
+        # ----------------------------------------------------------------------
+        if target == "bin":
+            added_sources = []
+            if paths:
+                for p in paths:
+                    if os.path.exists(p):
+                        src = self.session_graph.add_source_from_path(p, auto_activate=False)
+                        if src:
+                            added_sources.append(src)
+            if hasattr(self, "sources_dock"):
+                self.sources_dock.panel.refresh_tree()
+            if added_sources:
+                self.statusBar().showMessage(
+                    f"Added {len(added_sources)} media item(s) to Sources bin", 3000
+                )
+            return
+
+        # ----------------------------------------------------------------------
+        # Target: "stack" (Add Media to the stack)
+        # ----------------------------------------------------------------------
+        sids_to_add: list[str] = list(source_ids or [])
+        if paths:
+            for p in paths:
+                if os.path.exists(p):
+                    src = self.session_graph.add_source_from_path(p, auto_activate=False)
+                    if src and src.id not in sids_to_add:
+                        sids_to_add.append(src.id)
+
+        if not sids_to_add:
+            return
+
+        active_viewable = self.session_graph.get_active_viewable()
+        target_stack: Optional[StackView] = None
+        if isinstance(active_viewable, StackView):
+            target_stack = active_viewable
+
+        if target_stack is not None:
+            # Append to active stack
+            count_added = 0
+            for sid in sids_to_add:
+                if sid not in target_stack.source_ids:
+                    target_stack.source_ids.append(sid)
+                    count_added += 1
+
+            # If stack had only 1 item before, set index_b to 1 if we now have >= 2 items
+            if len(target_stack.source_ids) >= 2 and target_stack.index_b == target_stack.index_a:
+                target_stack.index_b = 1
+
+            self.session_graph.graph_changed.emit()
+            if hasattr(self, "sources_dock"):
+                self.sources_dock.panel.refresh_tree()
+                self.sources_dock.panel._refresh_subpanels()
+
+            self._on_active_view_changed("stack", target_stack.id)
+            self.statusBar().showMessage(
+                f"Added {count_added} layer(s) to stack '{target_stack.name}'", 3000
+            )
+        else:
+            # Create a new stack named 'Default stack' or numbered sequentially
+            existing_stack_names = {s.name for s in self.session_graph.stacks.values()}
+            if "Default stack" not in existing_stack_names:
+                new_name = "Default stack"
+            else:
+                n = 2
+                while f"Stack {n}" in existing_stack_names:
+                    n += 1
+                new_name = f"Stack {n}"
+
+            stk = self.session_graph.create_stack(
+                name=new_name,
+                source_ids=sids_to_add,
+                compare_mode="switch",
+            )
+            if hasattr(self, "sources_dock"):
+                self.sources_dock.panel.refresh_tree()
+                self.sources_dock.panel._refresh_subpanels()
+            self.statusBar().showMessage(
+                f"Created '{stk.name}' with {len(sids_to_add)} layers", 3000
+            )
 
     def _on_file_dropped(self, path: str) -> None:
         self._on_files_dropped([path])
@@ -4187,12 +4451,22 @@ class MainWindow(QMainWindow):
         }
         return names.get(str(engine_mode).lower(), f"Engine: {engine_mode}")
 
+    def _apply_hud_opacity(self, opacity: float) -> None:
+        """Apply floating HUD opacity to all active and standby floating HUD cards and markup palette."""
+        for card in self._get_all_hud_cards():
+            if hasattr(card, "set_hud_opacity"):
+                card.set_hud_opacity(opacity)
+        if hasattr(self, "markup_palette") and hasattr(self.markup_palette, "set_hud_opacity"):
+            self.markup_palette.set_hud_opacity(opacity)
+
     def _on_open_preferences(self) -> None:
         dlg = PreferencesDialog(self.pref_mgr, self)
+        dlg.hud_opacity_changed.connect(self._apply_hud_opacity)
         dlg.exec()
 
     def _on_open_preferences_tab(self, tab_name: str) -> None:
         dlg = PreferencesDialog(self.pref_mgr, self)
+        dlg.hud_opacity_changed.connect(self._apply_hud_opacity)
         dlg.open_tab(tab_name)
         dlg.exec()
 
@@ -4224,6 +4498,7 @@ class MainWindow(QMainWindow):
         )
         scrub_en = getattr(prefs, "canvas_scrub_enabled", True)
         self.viewport.set_scrub_mode(scrub_en)
+        self._apply_hud_opacity(getattr(prefs, "hud_opacity", 0.85))
         self.top_bar.set_scrub_mode(scrub_en)
 
         # Hot-switch GPU Playback Engine and VSync dynamically
@@ -4431,6 +4706,8 @@ class MainWindow(QMainWindow):
                 raw = self.reader.read_frame(f)
             if raw is None and self.viewport._image_a is not None:
                 raw = self.viewport._image_a
+            if isinstance(raw, (tuple, list)):
+                raw = self._resolve_frame_from_tuple(raw)
             return raw
 
         dlg = ExportDialog(
@@ -4458,6 +4735,8 @@ class MainWindow(QMainWindow):
                 return self._render_frame_for_export(frame_num)
             else:
                 raw = self.reader.read_frame(frame_num) if self.reader else None
+                if isinstance(raw, (tuple, list)):
+                    raw = self._resolve_frame_from_tuple(raw)
                 if raw is None:
                     return np.zeros((1080, 1920, 3), dtype=np.uint8)
                 if raw.dtype in (np.float32, np.float64):
@@ -4582,38 +4861,102 @@ class MainWindow(QMainWindow):
             self.info_strip_act.setChecked(self.viewport.show_info_strip)
         self.statusBar().showMessage(f"Info Strip: {'Shown' if self.viewport.show_info_strip else 'Hidden'}", 2000)
 
+    def _refresh_active_source_details(self) -> None:
+        """Update floating details HUD, Viewport info strip, and subpanels for current active source."""
+        active_src = None
+        if hasattr(self, "session_graph"):
+            viewable = self.session_graph.get_active_viewable()
+            if isinstance(viewable, StackView) and viewable.source_ids:
+                if hasattr(self, "sources_dock") and hasattr(self.sources_dock, "panel"):
+                    row = self.sources_dock.panel.list_inputs.currentRow()
+                    if 0 <= row < len(viewable.source_ids):
+                        sid = viewable.source_ids[row]
+                        active_src = self.session_graph.sources.get(sid)
+                if not active_src:
+                    if viewable.compare_mode == "switch":
+                        active_src = viewable.get_current_layer(self.session_graph.sources)
+                    else:
+                        active_src = viewable.get_layer_a(self.session_graph.sources)
+                if not active_src and viewable.source_ids:
+                    active_src = self.session_graph.sources.get(viewable.source_ids[0])
+            elif isinstance(viewable, SourceItem):
+                active_src = viewable
+
+            if active_src:
+                self._current_media_path = active_src.path
+                self._current_media_type = active_src.media_type
+                if hasattr(self.viewport, "info_strip_data"):
+                    self.viewport.info_strip_data["media_name"] = active_src.name
+                    self.viewport.info_strip_data["file_path"] = active_src.path
+                if active_src.width and active_src.height:
+                    self.viewport.set_media_resolution(active_src.width, active_src.height)
+
+        if hasattr(self, "hud_source_details") and not self.hud_source_details.isHidden():
+            self.source_details_widget.update_info(self._get_current_source_info())
+        if hasattr(self, "viewport"):
+            self.viewport.update()
+
     def _get_current_source_info(self) -> dict:
         from openreview.core.metadata import extract_media_metadata
         from openreview.models.session_graph import SourceItem, StackView
 
         media_path = self._current_media_path
         media_type = self._current_media_type
+        active_src = None
 
         # If inspecting, check active viewable / stack / selected source in session graph
         if hasattr(self, "session_graph"):
             viewable = self.session_graph.get_active_viewable()
             if isinstance(viewable, StackView) and viewable.source_ids:
-                top_id = viewable.source_ids[0]
-                top_src = self.session_graph.sources.get(top_id)
-                if top_src:
-                    media_path = top_src.path
-                    media_type = top_src.media_type
+                selected_input_src = None
+                if hasattr(self, "sources_dock") and hasattr(self.sources_dock, "panel"):
+                    row = self.sources_dock.panel.list_inputs.currentRow()
+                    if 0 <= row < len(viewable.source_ids):
+                        sid = viewable.source_ids[row]
+                        selected_input_src = self.session_graph.sources.get(sid)
+
+                if selected_input_src:
+                    active_src = selected_input_src
+                elif viewable.compare_mode == "switch":
+                    active_src = viewable.get_current_layer(self.session_graph.sources)
+                else:
+                    active_src = viewable.get_layer_a(self.session_graph.sources)
+
+                if not active_src and viewable.source_ids:
+                    active_src = self.session_graph.sources.get(viewable.source_ids[0])
+
+                if active_src:
+                    media_path = active_src.path
+                    media_type = active_src.media_type
+            elif isinstance(viewable, SourceItem):
+                active_src = viewable
+                media_path = viewable.path
+                media_type = viewable.media_type
             elif not media_path or media_path == "none":
-                if isinstance(viewable, SourceItem):
-                    media_path = viewable.path
-                    media_type = viewable.media_type
-                elif hasattr(self, "sources_panel"):
+                if hasattr(self, "sources_panel"):
                     selected = self.sources_panel._get_selected_nodes()
                     if selected and isinstance(selected[0], SourceItem):
+                        active_src = selected[0]
                         media_path = selected[0].path
                         media_type = selected[0].media_type
 
-        # Extract file & stream metadata via ffprobe / PIL / OpenCV
-        extracted = extract_media_metadata(media_path) if media_path else {}
+        # Resolve frame disk path for image sequence if applicable
+        target_path = media_path
+        cur_f = getattr(self.clock, "current_frame", 1)
+        if active_src and hasattr(self, "_get_source_frame_path"):
+            resolved = self._get_source_frame_path(active_src, cur_f)
+            if resolved and os.path.exists(resolved):
+                target_path = resolved
+
+        # Extract file & stream metadata via ffprobe / PIL / OpenCV / OpenEXR
+        extracted = extract_media_metadata(target_path) if target_path else {}
 
         # Merge with live viewer & timeline properties
         info = dict(extracted)
-        info["file_path"] = media_path or "Synthetic Stream"
+        info["file_path"] = target_path or media_path or "Synthetic Stream"
+        if target_path and media_path and target_path != media_path:
+            info["sequence_pattern"] = media_path
+            info["file_name"] = os.path.basename(target_path)
         info["media_type"] = media_type.capitalize() if media_type and media_type != "none" else ("Video" if info.get("video_codec") else "Synthetic Stream")
 
         if not info.get("width"):
@@ -5007,7 +5350,7 @@ class MainWindow(QMainWindow):
 
             cur = viewable.get_current_layer(self.session_graph.sources)
             self.cache.set_active_source(cur.id if cur else None)
-
+    
             sources_list = [self.session_graph.sources[sid] for sid in viewable.source_ids if sid in self.session_graph.sources]
             if sources_list:
                 start_f = min(s.start_frame for s in sources_list)
@@ -5138,43 +5481,50 @@ class MainWindow(QMainWindow):
         self.viewport.update()
 
     def _on_sources_view_updated(self) -> None:
-        viewable = self.session_graph.get_active_viewable()
-        if viewable is not None:
-            if isinstance(viewable, StackView):
-                self.viewport.comparison_state.stack_mix = getattr(viewable, "stack_mix", 1.0)
-                self.viewport.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
-                self.comparison_state.stack_mix = getattr(viewable, "stack_mix", 1.0)
-                self.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
-                if hasattr(self, "sources_dock"):
-                    self.sources_dock.panel._refresh_subpanels()
-                if viewable.compare_mode == "switch":
-                    comp_mode = ComparisonMode.OFF if (viewable.current_layer_index == viewable.index_b) else ComparisonMode.OVER
+        if getattr(self, "_in_sources_view_updated", False):
+            return
+        self._in_sources_view_updated = True
+        try:
+            viewable = self.session_graph.get_active_viewable()
+            if viewable is not None:
+                if isinstance(viewable, StackView):
+                    self.viewport.comparison_state.stack_mix = getattr(viewable, "stack_mix", 1.0)
+                    self.viewport.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
+                    self.comparison_state.stack_mix = getattr(viewable, "stack_mix", 1.0)
+                    self.comparison_state.channels_a = getattr(viewable, "channels_a", (True, True, True, True))
+                    if hasattr(self, "sources_dock"):
+                        self.sources_dock.panel._refresh_subpanels()
+                    if viewable.compare_mode == "switch":
+                        comp_mode = ComparisonMode.OFF if (viewable.current_layer_index == viewable.index_b) else ComparisonMode.OVER
+                    else:
+                        mode_map = {
+                            "wipe": ComparisonMode.WIPE,
+                            "switch": ComparisonMode.OVER,
+                            "split": ComparisonMode.SPLIT,
+                            "difference": ComparisonMode.DIFFERENCE,
+                            "difference_inverted": ComparisonMode.DIFFERENCE_INVERTED,
+                            "over": ComparisonMode.OVER,
+                            "add": ComparisonMode.ADD,
+                        }
+                        comp_mode = mode_map.get(viewable.compare_mode, ComparisonMode.OVER)
+                    self.comparison_state.mode = comp_mode
+                    self.viewport.comparison_state.mode = comp_mode
+                    self._on_frame_changed(self.clock.current_frame)
+                    self.viewport.update()
+                    self._on_cache_updated()
+                    if self.cache.mode != CacheMode.OFF and getattr(self, "_cache_started", False):
+                        self._trigger_prefetch()
+                    if hasattr(self, "wipe_widget"):
+                        self.wipe_widget.btn_wipe.setChecked(comp_mode == ComparisonMode.WIPE)
+                        self.wipe_widget.btn_split.setChecked(comp_mode == ComparisonMode.SPLIT)
+                        self.wipe_widget.btn_diff.setChecked(comp_mode == ComparisonMode.DIFFERENCE)
+                        self.wipe_widget.btn_off.setChecked(comp_mode in (ComparisonMode.OFF, ComparisonMode.OVER))
+                    self.setWindowTitle(f"OpenReview - Stack: {viewable.name} [{viewable.compare_mode.upper()} mode]")
                 else:
-                    mode_map = {
-                        "wipe": ComparisonMode.WIPE,
-                        "switch": ComparisonMode.OVER,
-                        "split": ComparisonMode.SPLIT,
-                        "difference": ComparisonMode.DIFFERENCE,
-                        "difference_inverted": ComparisonMode.DIFFERENCE_INVERTED,
-                        "over": ComparisonMode.OVER,
-                        "add": ComparisonMode.ADD,
-                    }
-                    comp_mode = mode_map.get(viewable.compare_mode, ComparisonMode.OVER)
-                self.comparison_state.mode = comp_mode
-                self.viewport.comparison_state.mode = comp_mode
-                self._on_frame_changed(self.clock.current_frame)
-                self.viewport.update()
-                self._on_cache_updated()
-                if self.cache.mode != CacheMode.OFF and getattr(self, "_cache_started", False):
-                    self._trigger_prefetch()
-                if hasattr(self, "wipe_widget"):
-                    self.wipe_widget.btn_wipe.setChecked(comp_mode == ComparisonMode.WIPE)
-                    self.wipe_widget.btn_split.setChecked(comp_mode == ComparisonMode.SPLIT)
-                    self.wipe_widget.btn_diff.setChecked(comp_mode == ComparisonMode.DIFFERENCE)
-                    self.wipe_widget.btn_off.setChecked(comp_mode in (ComparisonMode.OFF, ComparisonMode.OVER))
-                self.setWindowTitle(f"OpenReview - Stack: {viewable.name} [{viewable.compare_mode.upper()} mode]")
-            else:
-                self._on_active_view_changed(self.session_graph.active_view_type.value, viewable.id)
+                    self._on_active_view_changed(self.session_graph.active_view_type.value, viewable.id)
+                self._refresh_active_source_details()
+        finally:
+            self._in_sources_view_updated = False
 
     def _on_step_clip_or_segment_next(self) -> None:
         """Step to next clip boundaries in Sequence view (PageDown), or next bookmark segment."""

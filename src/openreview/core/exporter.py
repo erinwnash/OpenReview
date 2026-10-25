@@ -33,6 +33,10 @@ class MediaExporter:
     @staticmethod
     def _to_uint8(image_data: np.ndarray) -> np.ndarray:
         """Convert numpy array to uint8 RGB (0..255)."""
+        if isinstance(image_data, (tuple, list)):
+            image_data = next((x for x in image_data if isinstance(x, np.ndarray)), None)
+        if image_data is None:
+            return np.zeros((1080, 1920, 3), dtype=np.uint8)
         if image_data.dtype == np.uint8:
             return image_data[:, :, :3]
         if image_data.dtype == np.uint16:
@@ -42,6 +46,10 @@ class MediaExporter:
     @staticmethod
     def resize_frame(image: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
         """High-quality downscaling/upscaling using Area/Lanczos resampling."""
+        if isinstance(image, (tuple, list)):
+            image = next((x for x in image if isinstance(x, np.ndarray)), None)
+        if image is None:
+            return np.zeros((target_h, target_w, 3), dtype=np.uint8)
         h, w = image.shape[:2]
         if w == target_w and h == target_h:
             return image
@@ -133,6 +141,10 @@ class MediaExporter:
         bit_depth: int = 10,
     ) -> None:
         """Save an image array to a standard 10-bit or 16-bit SMPTE 268M DPX file."""
+        if isinstance(image_data, (tuple, list)):
+            image_data = next((x for x in image_data if isinstance(x, np.ndarray)), None)
+        if image_data is None:
+            image_data = np.zeros((1080, 1920, 3), dtype=np.uint8)
         p = Path(file_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         from openreview.core.image_io import write_dpx
@@ -155,6 +167,10 @@ class MediaExporter:
         quality: int = 95,
     ) -> None:
         """Save image array to disk in EXR, DPX, TIFF, PNG, JPEG, or Targa format."""
+        if isinstance(image_data, (tuple, list)):
+            image_data = next((x for x in image_data if isinstance(x, np.ndarray)), None)
+        if image_data is None:
+            image_data = np.zeros((1080, 1920, 3), dtype=np.uint8)
         p = Path(file_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         ext = p.suffix.lower()
@@ -212,14 +228,22 @@ class MediaExporter:
                 return
             else:
                 arr_8 = MediaExporter._to_uint8(image_data)
-                img = Image.fromarray(arr_8)
-                img.save(str(p))
+                if HAS_CV2:
+                    bgr = cv2.cvtColor(arr_8, cv2.COLOR_RGB2BGR) if arr_8.ndim >= 3 and arr_8.shape[2] >= 3 else arr_8
+                    cv2.imwrite(str(p), bgr, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+                else:
+                    img = Image.fromarray(arr_8)
+                    img.save(str(p))
                 return
 
         if ext in (".jpg", ".jpeg"):
             arr_8 = MediaExporter._to_uint8(image_data)
-            img = Image.fromarray(arr_8)
-            img.save(str(p), quality=int(quality))
+            if HAS_CV2:
+                bgr = cv2.cvtColor(arr_8, cv2.COLOR_RGB2BGR) if arr_8.ndim >= 3 and arr_8.shape[2] >= 3 else arr_8
+                cv2.imwrite(str(p), bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+            else:
+                img = Image.fromarray(arr_8)
+                img.save(str(p), quality=int(quality))
             return
 
         if ext == ".tga":
@@ -481,6 +505,9 @@ class MediaExporter:
         Renders vector markup strokes directly onto a base image at native image resolution,
         completely independent of screen display size, viewport pan, and zoom.
         """
+        if isinstance(base_img, (tuple, list)):
+            base_img = next((x for x in base_img if isinstance(x, np.ndarray)), None)
+
         if base_img is None:
             return np.zeros((1080, 1920, 3), dtype=np.uint8)
 
@@ -604,15 +631,18 @@ class MediaExporter:
     def export_pdf_review_sheet(
         output_pdf_path: str | Path,
         entries: List[dict],
-        title: str = "OpenReview - VFX Review Sheet",
+        title: Optional[str] = None,
         fps: float = 24.0,
+        pdf_config: Optional[dict] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> str:
         """
         Generate a structured, professional studio PDF review report using reportlab.
         Includes high-resolution frame thumbnails with burned-in annotations and review notes.
+        Fully customizable via user preferences or explicit pdf_config overrides.
         """
         import tempfile
-        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.lib.pagesizes import letter, A4, legal, landscape, portrait
         from reportlab.lib import colors
         from reportlab.platypus import (
             SimpleDocTemplate,
@@ -627,101 +657,336 @@ class MediaExporter:
         p = Path(output_pdf_path)
         p.parent.mkdir(parents=True, exist_ok=True)
 
+        # Pull defaults from PreferencesManager if available
+        prefs = None
+        try:
+            from openreview.core.preferences import PreferencesManager
+            prefs = PreferencesManager.instance().prefs
+        except Exception:
+            pass
+
+        cfg = pdf_config or {}
+
+        # 1. Resolve branding & header settings
+        doc_title = title or cfg.get("title") or getattr(prefs, "pdf_title", "OpenReview - VFX Review Sheet")
+        studio_name = cfg.get("studio_name") or getattr(prefs, "pdf_studio_name", "")
+        author_name = cfg.get("author_name") or getattr(prefs, "pdf_author_name", "")
+        logo_path = cfg.get("logo_path") or getattr(prefs, "pdf_logo_path", "")
+        header_color_hex = cfg.get("header_color") or getattr(prefs, "pdf_header_color", "#c28a10")
+
+        # 2. Resolve metadata toggles
+        show_date = cfg.get("show_date", getattr(prefs, "pdf_show_date", True))
+        show_fps = cfg.get("show_fps", getattr(prefs, "pdf_show_fps", True))
+        show_keyframe_count = cfg.get("show_keyframe_count", getattr(prefs, "pdf_show_keyframe_count", True))
+
+        # 3. Resolve page size & orientation
+        page_size_name = str(cfg.get("page_size", getattr(prefs, "pdf_page_size", "letter"))).lower()
+        orientation_name = str(cfg.get("page_orientation", getattr(prefs, "pdf_page_orientation", "landscape"))).lower()
+
+        base_sizes = {"letter": letter, "a4": A4, "legal": legal}
+        raw_size = base_sizes.get(page_size_name, letter)
+        final_pagesize = landscape(raw_size) if orientation_name == "landscape" else portrait(raw_size)
+
+        # 4. Resolve layout mode & card element toggles
+        layout_mode = str(cfg.get("layout_mode", getattr(prefs, "pdf_layout_mode", "detailed_row"))).lower()
+        show_frame_num = cfg.get("show_frame_num", getattr(prefs, "pdf_show_frame_num", True))
+        show_timecode = cfg.get("show_timecode", getattr(prefs, "pdf_show_timecode", True))
+        show_stroke_count = cfg.get("show_stroke_count", getattr(prefs, "pdf_show_stroke_count", True))
+        show_notes = cfg.get("show_notes", getattr(prefs, "pdf_show_notes", True))
+        show_source_path = cfg.get("show_source_path", getattr(prefs, "pdf_show_source_path", True))
+
         doc = SimpleDocTemplate(
             str(p),
-            pagesize=landscape(letter),
+            pagesize=final_pagesize,
             leftMargin=36,
             rightMargin=36,
             topMargin=36,
             bottomMargin=36,
         )
 
+        printable_width = final_pagesize[0] - 72
+
         styles = getSampleStyleSheet()
+        try:
+            head_c = colors.HexColor(header_color_hex)
+        except Exception:
+            head_c = colors.HexColor("#c28a10")
+
         title_style = ParagraphStyle(
             "DocTitle",
             parent=styles["Heading1"],
             fontSize=18,
             leading=22,
-            textColor=colors.HexColor("#c28a10"),
+            textColor=head_c,
+            fontName="Helvetica-Bold",
+        )
+        studio_style = ParagraphStyle(
+            "StudioHeading",
+            parent=styles["Normal"],
+            fontSize=11,
+            leading=14,
+            textColor=colors.HexColor("#333333"),
             fontName="Helvetica-Bold",
         )
         sub_style = ParagraphStyle(
             "SubHeader",
             parent=styles["Normal"],
-            fontSize=10,
-            leading=14,
-            textColor=colors.HexColor("#555555"),
+            fontSize=9,
+            leading=13,
+            textColor=colors.HexColor("#666666"),
             fontName="Helvetica",
         )
         item_title_style = ParagraphStyle(
             "ItemTitle",
             parent=styles["Heading2"],
-            fontSize=12,
-            leading=16,
+            fontSize=11,
+            leading=15,
             textColor=colors.HexColor("#1a1a1a"),
             fontName="Helvetica-Bold",
         )
         note_style = ParagraphStyle(
             "NoteStyle",
             parent=styles["Normal"],
-            fontSize=10,
-            leading=14,
+            fontSize=9,
+            leading=13,
             textColor=colors.HexColor("#2a2a2a"),
             fontName="Helvetica",
         )
 
         story = []
-
-        import datetime
-        date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        story.append(Paragraph(title, title_style))
-        story.append(Paragraph(f"Generated on {date_str} | FPS: {fps:.2f} | Annotated Keyframes: {len(entries)}", sub_style))
-        story.append(Spacer(1, 14))
-
         temp_files = []
         try:
-            for item in entries:
+            # Helper to resolve and rasterize logo image (supporting SVG & bitmap formats with proportional auto-scaling)
+            def _resolve_logo_image(path_str: str) -> Optional[tuple[str, float, float]]:
+                if not path_str or not os.path.isfile(path_str):
+                    return None
+                try:
+                    p_lower = path_str.lower()
+                    if p_lower.endswith(".svg"):
+                        from PySide6.QtSvg import QSvgRenderer
+                        from PySide6.QtGui import QImage, QPainter
+                        from PySide6.QtCore import Qt
+
+                        renderer = QSvgRenderer(path_str)
+                        if not renderer.isValid():
+                            return None
+                        d_size = renderer.defaultSize()
+                        orig_w = float(d_size.width()) if d_size.width() > 0 else 200.0
+                        orig_h = float(d_size.height()) if d_size.height() > 0 else 60.0
+
+                        # Rasterize SVG to high-res transparent PNG
+                        scale = min(1200.0 / orig_w, 400.0 / orig_h)
+                        render_w = max(1, int(orig_w * max(1.0, scale)))
+                        render_h = max(1, int(orig_h * max(1.0, scale)))
+
+                        qimg = QImage(render_w, render_h, QImage.Format.Format_ARGB32)
+                        qimg.fill(Qt.GlobalColor.transparent)
+                        painter = QPainter(qimg)
+                        renderer.render(painter)
+                        painter.end()
+
+                        tf = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                        tf_path = tf.name
+                        tf.close()
+                        temp_files.append(tf_path)
+                        qimg.save(tf_path)
+                        final_path = tf_path
+                    else:
+                        final_path = path_str
+                        from PIL import Image as PILImage
+                        with PILImage.open(final_path) as im:
+                            orig_w, orig_h = float(im.width), float(im.height)
+
+                    # Proportional auto-scale (max 120 width x 45 height)
+                    aspect = orig_w / max(1.0, orig_h)
+                    target_w = min(120.0, 45.0 * aspect)
+                    target_h = target_w / aspect
+                    if target_h > 45.0:
+                        target_h = 45.0
+                        target_w = target_h * aspect
+
+                    return final_path, target_w, target_h
+                except Exception as e:
+                    logger.warning("[MediaExporter] Could not process logo '%s': %s", path_str, e)
+                    return None
+
+            # Subtitle items
+            import datetime
+            date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            sub_items = []
+            if show_date:
+                sub_items.append(f"Generated on {date_str}")
+            if show_fps:
+                sub_items.append(f"FPS: {fps:.2f}")
+            if show_keyframe_count:
+                sub_items.append(f"Annotated Keyframes: {len(entries)}")
+            if author_name:
+                sub_items.append(f"Reviewer: {author_name}")
+
+            subtitle_text = " &nbsp;|&nbsp; ".join(sub_items) if sub_items else ""
+
+            # Build Header (with optional Studio Logo)
+            header_text_elements = [Paragraph(doc_title, title_style)]
+            if studio_name:
+                header_text_elements.append(Paragraph(f"<b>Facility / Studio:</b> {studio_name}", studio_style))
+            if subtitle_text:
+                header_text_elements.append(Paragraph(subtitle_text, sub_style))
+
+            logo_info = _resolve_logo_image(logo_path)
+            if logo_info is not None:
+                final_logo_path, logo_w, logo_h = logo_info
+                col_w_logo = logo_w + 12
+                logo_img = RLImage(final_logo_path, width=logo_w, height=logo_h)
+                logo_table = Table([[logo_img, header_text_elements]], colWidths=[col_w_logo, printable_width - col_w_logo])
+                logo_table.setStyle(
+                    TableStyle([
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("PADDING", (0, 0), (-1, -1), 0),
+                    ])
+                )
+                story.append(logo_table)
+            else:
+                story.extend(header_text_elements)
+
+            story.append(Spacer(1, 14))
+            # Helper to build card content for an entry
+            def _build_card_content(item: dict) -> list:
                 f_num = item.get("frame", 0)
                 tc = item.get("timecode", "00:00:00:00")
                 note_text = item.get("note", "").strip() or "No review notes."
                 st_count = item.get("strokes_count", 0)
-                img_data = item.get("image")
+                src_path = item.get("source_path", "")
 
-                tf = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                text_content = []
+                hdr_parts = []
+                if show_frame_num:
+                    hdr_parts.append(f"<b>Frame:</b> {f_num}")
+                if show_timecode:
+                    hdr_parts.append(f"<b>Timecode:</b> {tc}")
+                if hdr_parts:
+                    text_content.append(Paragraph(" &nbsp;&nbsp;|&nbsp;&nbsp; ".join(hdr_parts), item_title_style))
+
+                if show_source_path and src_path:
+                    base_name = Path(src_path).name
+                    text_content.append(Paragraph(f"<b>Source:</b> {base_name}", sub_style))
+
+                if show_stroke_count:
+                    text_content.append(Paragraph(f"<b>Markup:</b> {st_count} vector stroke(s)", sub_style))
+
+                if show_notes:
+                    text_content.append(Spacer(1, 4))
+                    text_content.append(Paragraph("<b>Review Notes:</b>", sub_style))
+                    text_content.append(Paragraph(note_text.replace("\n", "<br/>"), note_style))
+
+                return text_content
+
+            def _prepare_thumb(img_data: Optional[np.ndarray], target_w: int, target_h: int) -> RLImage:
+                tf = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
                 tf_path = tf.name
                 tf.close()
                 temp_files.append(tf_path)
 
                 if img_data is not None:
-                    MediaExporter.save_image_file(img_data, tf_path)
+                    # Downscale to 2x thumbnail resolution for high-DPI retina sharpness without embedding massive uncompressed frames
+                    render_w = max(int(target_w * 2), 640)
+                    render_h = max(int(target_h * 2), 360)
+                    h, w = img_data.shape[:2]
+                    if w > render_w or h > render_h:
+                        thumb_arr = MediaExporter.resize_frame(img_data, render_w, render_h)
+                    else:
+                        thumb_arr = img_data
+                    MediaExporter.save_image_file(thumb_arr, tf_path, quality=90)
                 else:
                     blank = np.zeros((100, 100, 3), dtype=np.uint8)
-                    MediaExporter.save_image_file(blank, tf_path)
+                    MediaExporter.save_image_file(blank, tf_path, quality=90)
 
-                thumb = RLImage(tf_path, width=320, height=180)
+                return RLImage(tf_path, width=target_w, height=target_h)
 
-                text_content = [
-                    Paragraph(f"<b>Frame:</b> {f_num} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Timecode:</b> {tc}", item_title_style),
-                    Paragraph(f"<b>Markup:</b> {st_count} vector stroke(s)", sub_style),
-                    Spacer(1, 6),
-                    Paragraph("<b>Review Notes:</b>", sub_style),
-                    Paragraph(note_text.replace("\n", "<br/>"), note_style),
-                ]
+            total_entries = len(entries)
 
-                row_table = Table([[thumb, text_content]], colWidths=[330, 380])
-                row_table.setStyle(
-                    TableStyle([
-                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8f9fa")),
-                        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#dddddd")),
-                        ("PADDING", (0, 0), (-1, -1), 8),
-                    ])
-                )
+            if layout_mode == "dense_grid":
+                # Dense Grid: 2 columns per row
+                col_w = (printable_width - 12) / 2.0
+                thumb_w = int(col_w - 16)
+                thumb_h = int(thumb_w * 9.0 / 16.0)
 
-                story.append(row_table)
-                story.append(Spacer(1, 12))
+                grid_cards = []
+                for idx, item in enumerate(entries):
+                    if progress_callback:
+                        progress_callback(idx, total_entries + 1, f"Preparing PDF thumbnails ({idx + 1} of {total_entries})...")
+                    img_data = item.get("image")
+                    if isinstance(img_data, (tuple, list)):
+                        img_data = next((x for x in img_data if isinstance(x, np.ndarray)), None)
 
+                    thumb = _prepare_thumb(img_data, thumb_w, thumb_h)
+                    card_elements = [thumb, Spacer(1, 4)] + _build_card_content(item)
+
+                    card_table = Table([[card_elements]], colWidths=[col_w])
+                    card_table.setStyle(
+                        TableStyle([
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8f9fa")),
+                            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#dddddd")),
+                            ("PADDING", (0, 0), (-1, -1), 6),
+                        ])
+                    )
+                    grid_cards.append(card_table)
+
+                # Pair up cards into 2-column rows
+                for i in range(0, len(grid_cards), 2):
+                    row_items = [grid_cards[i]]
+                    if i + 1 < len(grid_cards):
+                        row_items.append(grid_cards[i + 1])
+                        widths = [col_w, col_w]
+                    else:
+                        row_items.append("")
+                        widths = [col_w, col_w]
+
+                    row_pair = Table([row_items], colWidths=widths)
+                    row_pair.setStyle(
+                        TableStyle([
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("PADDING", (0, 0), (-1, -1), 0),
+                        ])
+                    )
+                    story.append(row_pair)
+                    story.append(Spacer(1, 10))
+
+            else:
+                # Detailed Row: Thumbnail Left, Details Right
+                is_landscape = (orientation_name == "landscape")
+                thumb_w = 320 if is_landscape else 240
+                thumb_h = int(thumb_w * 9.0 / 16.0)
+                details_w = printable_width - (thumb_w + 10)
+
+                for idx, item in enumerate(entries):
+                    if progress_callback:
+                        progress_callback(idx, total_entries + 1, f"Preparing PDF thumbnails ({idx + 1} of {total_entries})...")
+                    img_data = item.get("image")
+                    if isinstance(img_data, (tuple, list)):
+                        img_data = next((x for x in img_data if isinstance(x, np.ndarray)), None)
+
+                    thumb = _prepare_thumb(img_data, thumb_w, thumb_h)
+                    text_content = _build_card_content(item)
+
+                    row_table = Table([[thumb, text_content]], colWidths=[thumb_w + 10, details_w])
+                    row_table.setStyle(
+                        TableStyle([
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8f9fa")),
+                            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#dddddd")),
+                            ("PADDING", (0, 0), (-1, -1), 8),
+                        ])
+                    )
+
+                    story.append(row_table)
+                    story.append(Spacer(1, 12))
+
+            if progress_callback:
+                progress_callback(total_entries, total_entries + 1, "Compiling PDF document...")
             doc.build(story)
+            if progress_callback:
+                progress_callback(total_entries + 1, total_entries + 1, "Done")
         finally:
             for tf_path in temp_files:
                 try:
@@ -893,6 +1158,9 @@ class MediaExporter:
         ASC CDL, interactive color grading edits, 3D LUT, display view transform, and gamma,
         producing a color-managed uint8 RGB image matching viewport screen rendering exactly.
         """
+        if isinstance(raw_img, (tuple, list)):
+            raw_img = next((x for x in raw_img if isinstance(x, np.ndarray)), None)
+
         if raw_img is None:
             return np.zeros((1080, 1920, 3), dtype=np.uint8)
 
@@ -927,6 +1195,9 @@ class MediaExporter:
           - 'Cineon Log': Cineon log printing density curve float32, optional grade burn-in
           - 'Raw / Pass-Through': untouched raw frame data
         """
+        if isinstance(raw_img, (tuple, list)):
+            raw_img = next((x for x in raw_img if isinstance(x, np.ndarray)), None)
+
         if raw_img is None:
             return np.zeros((1080, 1920, 3), dtype=np.uint8)
 
